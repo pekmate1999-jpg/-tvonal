@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Ágynemű futár</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#111827;--mut:#6b7280;--bd:#e5e7eb;--ac:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#161d33;--tx:#e5e7eb;--mut:#9ca3af;--bd:#26304d;--ac:#3b82f6}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-bottom:84px}
+#app{max-width:640px;margin:0 auto;padding:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;margin-bottom:10px;overflow:hidden}
+.pad{padding:12px}
+.head{display:flex;gap:10px;align-items:center;padding:12px;cursor:pointer}
+.num{width:30px;height:30px;border-radius:50%;background:var(--ac);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex:none}
+.done .num{background:var(--ok)}
+.done .head b{text-decoration:line-through;opacity:.6}
+.grow{flex:1;min-width:0}.small{font-size:13px}.mut{color:var(--mut)}
+.body{padding:0 12px 12px;border-top:1px solid var(--bd)}
+.lbl{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);margin:10px 0 2px}
+.code{font:700 28px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.06em;word-break:break-all}
+.pre{white-space:pre-wrap}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.btn,button{appearance:none;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:10px;padding:11px 14px;font:inherit;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+.pri{background:var(--ac);color:#fff;border-color:var(--ac)}
+.okb{background:var(--ok);color:#fff;border-color:var(--ok)}
+.bad{color:var(--bad)}
+.on{outline:2px solid var(--ac);background:color-mix(in srgb,var(--ac) 15%,var(--card))}
+.dis{opacity:.4;pointer-events:none}
+.flex1{flex:1}
+input,textarea{width:100%;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:10px;padding:10px;font:inherit;margin-top:4px}
+textarea{min-height:76px;resize:vertical}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;border-radius:0;background:none;flex-direction:column;gap:0;font-size:12px;padding:10px 4px}
+nav button.on{outline:0;color:var(--ac);background:none}
+.sum{display:grid;grid-template-columns:repeat(3,1fr);text-align:center}
+.sum div{padding:12px 4px}.sum b{display:block;font-size:22px}
+#toast{position:fixed;left:12px;right:12px;bottom:90px;background:#111827;color:#fff;padding:12px 14px;border-radius:12px;display:none;z-index:9;max-width:616px;margin:0 auto;text-align:center}
+h2{font-size:18px;margin:6px 2px 10px}
+.tag{font-size:12px;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--bd)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<nav>
+  <button data-act="tab" data-tab="today">📋<span>Ma</span></button>
+  <button data-act="tab" data-tab="apts">🏠<span>Lakások</span></button>
+  <button data-act="tab" data-tab="hist">📊<span>Előzmények</span></button>
+  <button data-act="tab" data-tab="set">⚙️<span>Beállítás</span></button>
+</nav>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+/* ===== állapot ===== */
+const $=s=>document.querySelector(s);
+const LS={get(k,d){try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
+let apts=LS.get('apts',{}), today=LS.get('today',null), days=LS.get('days',[]);
+let cfg=Object.assign({template:'{név} Kész',city:'Budapest',startAddr:''},LS.get('cfg',{}));
+let ui={tab:'today',open:null,edit:null,aptOpen:null,histOpen:null,q:''};
+const save=()=>{LS.set('apts',apts);LS.set('today',today);LS.set('days',days);LS.set('cfg',cfg)};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid=()=>Math.random().toString(36).slice(2,9);
+const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+const fmtT=ms=>new Date(ms).toLocaleTimeString('hu-HU',{hour:'2-digit',minute:'2-digit'});
+const fmtDur=ms=>{const m=Math.max(0,Math.round(ms/60000)),h=Math.floor(m/60);return h?`${h} ó ${m%60} p`:`${m} p`};
+const fmtKm=k=>k.toFixed(1).replace('.',',')+' km';
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let toastT;
+function toast(m,sticky){const t=$('#toast');clearTimeout(toastT);if(!m){t.style.display='none';return}t.textContent=m;t.style.display='block';if(!sticky)toastT=setTimeout(()=>t.style.display='none',3500)}
+
+/* ===== üzenet feldolgozása ===== */
+function parseMsg(t){
+  let date=null;const names=[];
+  for(let line of t.split(/\r?\n/)){
+    line=line.trim();if(!line||line.startsWith('@'))continue;
+    const m=line.match(/^(\d{4})\.\s?(\d{2})\.\s?(\d{2})/);
+    if(m){date=`${m[1]}-${m[2]}-${m[3]}`;continue}
+    const n=line.replace(/[^\p{L}\p{N}\s.\-]/gu,'').replace(/\s+/g,' ').trim();
+    if(n)names.push(n);
+  }
+  return{date,names};
+}
+function findApt(name){
+  const k=norm(name);if(!k)return null;
+  if(apts[k])return apts[k];
+  const c=Object.values(apts).filter(a=>norm(a.name).startsWith(k));
+  return c.length===1?c[0]:null;
+}
+const getApt=s=>findApt(s.name);
+function aptKey(s){const a=getApt(s);return a?norm(a.name):norm(s.name)}
+
+/* ===== geokódolás, távolságok, útvonal ===== */
+let lastGeo=0;
+async function geocode(a){
+  if(!a||!a.address)return false;
+  if(a.lat&&a.geoAddr===a.address)return true;
+  const w=Math.max(0,1100-(Date.now()-lastGeo));if(w)await sleep(w);lastGeo=Date.now();
+  const q=(/budapest/i.test(a.address)||!cfg.city)?a.address:a.address+', '+cfg.city;
+  try{
+    const r=await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=hu&accept-language=hu&q='+encodeURIComponent(q));
+    const j=await r.json();
+    if(j[0]){a.lat=+j[0].lat;a.lon=+j[0].lon;a.geoAddr=a.address;return true}
+  }catch(e){}
+  return false;
+}
+const hav=(a,b)=>{const R=6371,t=x=>x*Math.PI/180,dLa=t(b.lat-a.lat),dLo=t(b.lon-a.lon);
+  const h=Math.sin(dLa/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+async function matrix(pts){
+  try{
+    const c=pts.map(p=>p.lon+','+p.lat).join(';');
+    const r=await fetch(`https://router.project-osrm.org/table/v1/driving/${c}?annotations=duration`);
+    const j=await r.json();
+    if(j.code==='Ok'&&j.durations&&!j.durations.flat().includes(null))return{d:j.durations,real:true};
+  }catch(e){}
+  return{d:pts.map(a=>pts.map(b=>hav(a,b)*1.3/30*3600)),real:false};
+}
+function solve(d,hasStart){
+  const n=d.length,first=hasStart?1:0,idx=[...Array(n).keys()].slice(first);
+  const cost=o=>{let s=0;for(let i=1;i<o.length;i++)s+=d[o[i-1]][o[i]];return s};
+  const nn=st=>{const o=[st],left=new Set(idx);left.delete(st);
+    while(left.size){const l=o[o.length-1];let b=null,bd=Infinity;for(const x of left)if(d[l][x]<bd){bd=d[l][x];b=x}o.push(b);left.delete(b)}return o};
+  let best=null,bc=Infinity;
+  for(const s of(hasStart?[0]:idx)){
+    let o=nn(s),c=cost(o),imp=true;
+    const lo=hasStart?1:0;
+    while(imp){imp=false;
+      for(let i=lo;i<o.length-1;i++)for(let j=i+1;j<o.length;j++){
+        const cand=o.slice(0,i).concat(o.slice(i,j+1).reverse(),o.slice(j+1));
+        const cc=cost(cand);if(cc<c-1e-9){o=cand;c=cc;imp=true}
+      }}
+    if(c<bc){bc=c;best=o}
+  }
+  return{order:hasStart?best.slice(1):best,cost:bc};
+}
+function gps(){return new Promise(r=>{
+  if(!navigator.geolocation)return r(null);
+  navigator.geolocation.getCurrentPosition(p=>r({lat:p.coords.latitude,lon:p.coords.longitude}),()=>r(null),{enableHighAccuracy:true,timeout:8000,maximumAge:60000});
+})}
+async function getStart(){
+  const p=await gps();if(p)return p;
+  if(cfg.startAddr){const t={address:cfg.startAddr};if(await geocode(t))return{lat:t.lat,lon:t.lon}}
+  const last=today.stops.filter(s=>s.status==='done'&&s.pos).sort((a,b)=>b.doneAt-a.doneAt)[0];
+  return last?last.pos:null;
+}
+async function optimize(){
+  if(!today)return;
+  const pend=today.stops.filter(s=>s.status!=='done');
+  if(pend.length<2){toast('Nincs mit optimalizálni');return}
+  const ok=[],bad=[];let i=0;
+  for(const s of pend){
+    toast(`Címek keresése ${++i}/${pend.length}…`,1);
+    const a=getApt(s);
+    if(a&&await geocode(a))ok.push(s);else bad.push(s);
+  }
+  save();toast('Útvonal számítása…',1);
+  const st=await getStart();
+  if(st&&!today.startPoint)today.startPoint=st;
+  let sorted=ok,info='';
+  if(ok.length>=2){
+    const pts=[...(st?[st]:[]),...ok.map(getApt)];
+    const{d,real}=await matrix(pts);
+    const{order,cost}=solve(d,!!st);
+    const off=st?1:0;
+    sorted=order.map(k=>ok[k-off]);
+    info=` · ~${Math.round(cost/60)} perc vezetés${real?'':' (becslés)'}`;
+  }
+  const done=today.stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt);
+  today.stops=[...done,...sorted,...bad];
+  save();render();
+  toast(`Kész${info}${bad.length?` · ⚠ ${bad.length} lakásnak nincs/nem található címe`:''}`);
+}
+async function legKm(from,to){
+  try{
+    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`);
+    const j=await r.json();if(j.code==='Ok')return{km:j.routes[0].distance/1000,approx:false};
+  }catch(e){}
+  return{km:hav(from,to)*1.3,approx:true};
+}
+
+/* ===== munka / műszak ===== */
+function newDay(names,date,append){
+  const stops=names.map(n=>({id:uid(),name:n,status:'pending',cleaner:null}));
+  if(append&&today){
+    const have=new Set(today.stops.map(s=>norm(s.name)));
+    today.stops.push(...stops.filter(s=>!have.has(norm(s.name))));
+  }else{
+    today={date:date||new Date().toISOString().slice(0,10),startedAt:null,endedAt:null,startPoint:null,stops};
+  }
+  save();ui.open=null;render();
+}
+async function startShift(){
+  today.startedAt=Date.now();save();render();
+  const p=await gps();if(p){today.startPoint=p;save()}
+  try{if(navigator.wakeLock)await navigator.wakeLock.request('screen')}catch(e){}
+}
+function endShift(){
+  if(!confirm('Befejezed a mai munkát? Az adatok az Előzményekbe kerülnek.'))return;
+  const pend=today.stops.filter(s=>s.status!=='done').length;
+  if(pend&&!confirm(`Még ${pend} lakás nincs kész. Biztosan lezárod?`))return;
+  today.endedAt=Date.now();days.unshift(today);today=null;save();ui.tab='hist';ui.histOpen=0;render();
+}
+async function markDone(id){
+  const s=today.stops.find(x=>x.id===id);if(!s||s.status==='done')return;
+  if(!today.startedAt){today.startedAt=s.navAt||Date.now()}
+  s.status='done';s.doneAt=Date.now();save();render();
+  const a=getApt(s);
+  if(a&&a.address&&await geocode(a))s.pos={lat:a.lat,lon:a.lon};
+  const prev=today.stops.filter(x=>x.status==='done'&&x!==s&&x.doneAt).sort((p,q)=>q.doneAt-p.doneAt)[0];
+  const from=prev?prev.pos:today.startPoint;
+  if(from&&s.pos){const r=await legKm(from,s.pos);s.legKm=r.km;s.approx=r.approx}
+  save();render();
+}
+function dayStats(t){
+  const done=t.stops.filter(s=>s.status==='done');
+  const kmv=done.reduce((a,s)=>a+(s.legKm||0),0);
+  const end=t.endedAt||Date.now();
+  return{done:done.length,total:t.stops.length,km:kmv,approx:done.some(s=>s.approx),ms:t.startedAt?end-t.startedAt:0};
+}
+
+/* ===== Excel / CSV import ===== */
+const RX={addr:/c[ií]m|address|utca/i,code:/k[oó]d|bel[eé]p|code|pin/i,help:/seg[eé]d|bejut|le[ií]r|[uú]tmutat|megjegyz|info|egy[eé]b/i,name:/n[eé]v|lak[aá]s|apartman|megnevez|azonos/i};
+function importRows(rows){
+  rows=rows.filter(r=>r.some(c=>String(c).trim()));
+  let hi=-1;
+  for(let i=0;i<Math.min(10,rows.length);i++){
+    const cells=rows[i].map(String);
+    if(cells.filter(c=>c.trim()).length>=2&&cells.some(c=>RX.addr.test(c)||RX.name.test(c))){hi=i;break}
+  }
+  let map={name:[0],addr:[1],code:[2],help:[3]},hdr=[];
+  if(hi>=0){
+    hdr=rows[hi].map(c=>String(c).trim());map={name:[],addr:[],code:[],help:[],rest:[]};
+    hdr.forEach((h,i)=>{
+      if(!h)return;
+      if(RX.addr.test(h))map.addr.push(i);
+      else if(RX.code.test(h))map.code.push(i);
+      else if(RX.help.test(h))map.help.push(i);
+      else if(RX.name.test(h)&&!map.name.length)map.name.push(i);
+      else map.rest.push(i);
+    });
+    if(!map.name.length){map.name=[map.rest.shift()??0]}
+  }
+  const join=(r,cols)=>cols.map(c=>{const v=String(r[c]??'').trim();if(!v)return'';return(cols.length>1&&hdr[c])?`${hdr[c]}: ${v}`:v}).filter(Boolean).join('\n');
+  let n=0;
+  for(const r of rows.slice(hi+1)){
+    const name=String(r[map.name[0]]??'').trim();if(!name)continue;
+    const k=norm(name);if(!k)continue;
+    const extra=(map.rest||[]).map(c=>{const v=String(r[c]??'').trim();return v?`${hdr[c]||''}: ${v}`:''}).filter(Boolean).join('\n');
+    const old=apts[k]||{};
+    const address=join(r,map.addr).replace(/\n/g,', ');
+    const help=[join(r,map.help),extra].filter(Boolean).join('\n');
+    apts[k]={...old,name,address,code:join(r,map.code),help,note:old.note||''};
+    if(old.address!==address){delete apts[k].lat;delete apts[k].lon;delete apts[k].geoAddr}
+    n++;
+  }
+  return n;
+}
+async function importFile(f){
+  if(typeof XLSX==='undefined'){toast('Az Excel-olvasó nem töltődött be (nincs net?)');return}
+  try{
+    const wb=XLSX.read(await f.arrayBuffer(),{type:'array',codepage:65001});
+    let n=0;
+    for(const sn of wb.SheetNames)n+=importRows(XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:false}));
+    save();render();toast(`${n} lakás betöltve`);
+  }catch(e){toast('Nem sikerült beolvasni: '+e.message)}
+}
+
+/* ===== nézetek ===== */
+function wazeUrl(a){
+  if(!a||!a.address)return null;
+  const q=(/budapest/i.test(a.address)||!cfg.city)?a.address:a.address+', '+cfg.city;
+  return'https://waze.com/ul?q='+encodeURIComponent(q)+'&navigate=yes'+(a.lat?`&ll=${a.lat},${a.lon}`:'');
+}
+function pasteBox(has){
+  return`<div class="card pad"><div class="lbl" style="margin-top:0">Reggeli üzenet beillesztése</div>
+  <textarea id="paste" placeholder="2026.11.02.&#10;@Mate&#10;DOHÁNY-2 🥀&#10;HOLLÓ 🪶"></textarea>
+  <div class="row"><button class="pri flex1" data-act="load" data-mode="new">Új nap</button>${has?'<button class="flex1" data-act="load" data-mode="add">+ Hozzáadás a mához</button>':''}</div></div>`;
+}
+function stopCard(s,i){
+  const a=getApt(s),key=aptKey(s),open=ui.open===s.id,done=s.status==='done';
+  const url=wazeUrl(a);
+  const viber='viber://forward?text='+encodeURIComponent(cfg.template.replace('{név}',s.name));
+  const cl=s.cleaner==='done'?'✅':s.cleaner==='strip'?'🧺':'';
+  const fa=`data-key="${esc(key)}" data-name="${esc(s.name)}"`;
+  let h=`<div class="card stop ${done?'done':''}"><div class="head" data-act="toggle" data-id="${s.id}">
+    <span class="num">${done?'✔':i+1}</span>
+    <div class="grow"><b>${esc(s.name)}</b> ${cl}${a&&a.note?' 📝':''}
+    <div class="mut small">${a&&a.address?esc(a.address):'⚠ nincs cím megadva'}${done?` · ${fmtT(s.doneAt)}`:''}${s.legKm?` · ${s.approx?'~':''}${fmtKm(s.legKm)}`:''}</div></div>
+    <span class="mut">${open?'▲':'▼'}</span></div>`;
+  if(open){
+    h+='<div class="body">';
+    if(a&&a.code)h+=`<div class="lbl">Belépő kód</div><div class="code">${esc(a.code)}</div>`;
+    if(a&&a.help)h+=`<div class="lbl">Bejutási segédlet</div><div class="pre">${esc(a.help)}</div>`;
+    if(!a||!a.address||ui.edit===s.id){
+      h+=`<div class="lbl">Cím</div><input data-f="address" ${fa} value="${esc(a?.address||'')}" placeholder="pl. Dohány utca 12">
+      <div class="lbl">Kód</div><input data-f="code" ${fa} value="${esc(a?.code||'')}">
+      <div class="lbl">Segédlet</div><textarea data-f="help" ${fa}>${esc(a?.help||'')}</textarea>`;
+    }
+    h+=`<div class="row"><a class="btn pri flex1 ${url?'':'dis'}" ${url?`href="${url}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>🧭 Waze</a>
+      ${s.arrivedAt?`<span class="tag" style="align-self:center">📍 ${fmtT(s.arrivedAt)}</span>`:`<button data-act="arrive" data-id="${s.id}">📍 Megérkeztem</button>`}</div>
+    <div class="lbl">Takarító</div>
+    <div class="row" style="margin-top:0"><button class="flex1 ${s.cleaner==='done'?'on':''}" data-act="cleaner" data-id="${s.id}" data-v="done">✅ Végzett</button>
+    <button class="flex1 ${s.cleaner==='strip'?'on':''}" data-act="cleaner" data-id="${s.id}" data-v="strip">🧺 Lehúzom</button></div>
+    <div class="lbl">Megjegyzés (a lakáshoz mentve)</div>
+    <textarea data-f="note" ${fa}>${esc(a?.note||'')}</textarea>
+    <div class="row">${done?`<button class="flex1" data-act="undo" data-id="${s.id}">↩ Visszavon</button>`:`<button class="okb flex1" data-act="done" data-id="${s.id}">✔ Kész</button>`}
+      <a class="btn flex1" href="${viber}">💬 Viber</a></div>
+    <div class="row"><button data-act="move" data-id="${s.id}" data-d="-1">▲</button><button data-act="move" data-id="${s.id}" data-d="1">▼</button>
+      <button data-act="edit" data-id="${s.id}">✏️ Adatok</button><button class="bad" data-act="del" data-id="${s.id}">✕ Törlés</button></div>`;
+    h+='</div>';
+  }
+  return h+'</div>';
+}
+function viewToday(){
+  if(!today)return pasteBox(false);
+  const st=dayStats(today);
+  let h=`<div class="card sum"><div><b>${st.done}/${st.total}</b><span class="mut small">lakás</span></div>
+    <div><b id="clock">${today.startedAt?fmtDur(st.ms):'–'}</b><span class="mut small">idő</span></div>
+    <div><b>${st.km?(st.approx?'~':'')+fmtKm(st.km):'–'}</b><span class="mut small">megtett</span></div></div>`;
+  h+=`<div class="row" style="margin:0 0 10px">${!today.startedAt?'<button class="okb flex1" data-act="start">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end">⏹ Munka vége</button>'}
+    <button class="pri flex1" data-act="optimize">🧭 Útvonal optimalizálás</button></div>`;
+  h+=today.stops.map(stopCard).join('');
+  return h+pasteBox(true);
+}
+function aptListHtml(){
+  const q=norm(ui.q);
+  const list=Object.entries(apts).filter(([k])=>!q||k.includes(q)).sort((a,b)=>a[1].name.localeCompare(b[1].name,'hu'));
+  if(!list.length)return'<div class="mut pad">Még nincs lakás. Töltsd be az Excelt vagy adj hozzá egyet.</div>';
+  return list.map(([k,a])=>{
+    const open=ui.aptOpen===k,fa=`data-key="${esc(k)}" data-name="${esc(a.name)}"`;
+    return`<div class="card"><div class="head" data-act="aptOpen" data-key="${esc(k)}"><div class="grow"><b>${esc(a.name)}</b>
+      <div class="mut small">${a.address?esc(a.address):'⚠ nincs cím'}</div></div><span class="mut">${open?'▲':'▼'}</span></div>
+      ${open?`<div class="body"><div class="lbl">Cím</div><input data-f="address" ${fa} value="${esc(a.address)}">
+      <div class="lbl">Kód</div><input data-f="code" ${fa} value="${esc(a.code)}">
+      <div class="lbl">Segédlet</div><textarea data-f="help" ${fa}>${esc(a.help)}</textarea>
+      <div class="lbl">Megjegyzés</div><textarea data-f="note" ${fa}>${esc(a.note||'')}</textarea>
+      <div class="row"><button class="bad" data-act="aptDel" data-key="${esc(k)}">✕ Lakás törlése</button></div></div>`:''}</div>`}).join('');
+}
+function viewApts(){
+  const n=Object.keys(apts).length,miss=Object.values(apts).filter(a=>!a.address).length;
+  return`<h2>Lakások <span class="mut small">${n} db${miss?` · ${miss} cím nélkül`:''}</span></h2>
+  <div class="card pad"><div class="lbl" style="margin-top:0">Excel / CSV betöltése</div>
+  <input type="file" id="xl" accept=".xlsx,.xls,.csv,.ods">
+  <div class="mut small" style="margin-top:6px">Az oszlopokat a fejléc alapján ismeri fel (név, cím, kód, segédlet). Újrabetöltéskor frissít, a megjegyzéseket megtartja.</div></div>
+  <div class="row" style="margin:0 0 10px"><input id="q" placeholder="Keresés…" value="${esc(ui.q)}" style="margin:0;flex:1"><button data-act="aptNew">+ Új</button></div>
+  <div id="aptlist">${aptListHtml()}</div>`;
+}
+function viewHist(){
+  if(!days.length)return'<h2>Előzmények</h2><div class="mut pad">Még nincs lezárt nap.</div>';
+  const tot=days.map(dayStats),tk=tot.reduce((a,t)=>a+t.km,0),tm=tot.reduce((a,t)=>a+t.ms,0);
+  let h=`<h2>Előzmények</h2><div class="card sum"><div><b>${days.length}</b><span class="mut small">nap</span></div><div><b>${fmtDur(tm)}</b><span class="mut small">összes idő</span></div><div><b>${fmtKm(tk)}</b><span class="mut small">összes km</span></div></div>`;
+  days.forEach((d,i)=>{
+    const s=tot[i],open=ui.histOpen===i;
+    h+=`<div class="card"><div class="head" data-act="histOpen" data-i="${i}"><div class="grow"><b>${esc(d.date)}</b>
+      <div class="mut small">${s.done}/${s.total} lakás · ${fmtDur(s.ms)} · ${s.approx?'~':''}${fmtKm(s.km)}</div></div><span class="mut">${open?'▲':'▼'}</span></div>`;
+    if(open){
+      let prev=d.startedAt;
+      h+='<div class="body">'+d.stops.map(s=>{
+        const dur=(s.status==='done'&&prev)?fmtDur(s.doneAt-prev):'';if(s.status==='done')prev=s.doneAt;
+        return`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><b>${esc(s.name)}</b> ${s.cleaner==='done'?'✅ takarító kész':s.cleaner==='strip'?'🧺 lehúzás':''}
+        <div class="mut small">${s.status==='done'?`${fmtT(s.doneAt)} · ${dur}${s.legKm?` · ${s.approx?'~':''}${fmtKm(s.legKm)}`:''}`:'nem lett kész'}</div></div>`}).join('')+
+      `<div class="row"><button class="bad" data-act="histDel" data-i="${i}">✕ Nap törlése</button></div></div>`;
+    }
+    h+='</div>';
+  });
+  return h;
+}
+function viewSet(){
+  return`<h2>Beállítások</h2><div class="card pad">
+  <div class="lbl" style="margin-top:0">Viber üzenet sablon ({név} = lakás neve)</div><input data-cfg="template" value="${esc(cfg.template)}">
+  <div class="lbl">Város (ha a cím nem tartalmazza)</div><input data-cfg="city" value="${esc(cfg.city)}">
+  <div class="lbl">Kiindulópont címe (pl. mosoda; ha a GPS nem megy)</div><input data-cfg="startAddr" value="${esc(cfg.startAddr)}"></div>
+  <div class="card pad"><div class="lbl" style="margin-top:0">Biztonsági mentés</div>
+  <div class="row" style="margin-top:4px"><button class="flex1" data-act="export">⬇ Mentés (JSON)</button></div>
+  <input type="file" id="bk" accept=".json" style="margin-top:8px">
+  <div class="mut small" style="margin-top:6px">Az adatok csak ebben a böngészőben vannak tárolva. Böngészőadat törlése előtt ments!</div></div>`;
+}
+function render(){
+  $('#app').innerHTML=ui.tab==='today'?viewToday():ui.tab==='apts'?viewApts():ui.tab==='hist'?viewHist():viewSet();
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===ui.tab));
+}
+setInterval(()=>{const c=$('#clock');if(c&&today&&today.startedAt&&!today.endedAt)c.textContent=fmtDur(Date.now()-today.startedAt)},15000);
+
+/* ===== események ===== */
+document.addEventListener('click',e=>{
+  const el=e.target.closest('[data-act]');if(!el)return;
+  const d=el.dataset,act=d.act,stop=d.id&&today?today.stops.find(s=>s.id===d.id):null;
+  if(act==='nav'){if(stop&&!stop.navAt){stop.navAt=Date.now();save()}return}
+  if(act==='tab'){ui.tab=d.tab;render();return}
+  if(act==='toggle'){ui.open=ui.open===d.id?null:d.id;ui.edit=null;render();return}
+  if(act==='load'){
+    const{date,names}=parseMsg($('#paste').value);
+    if(!names.length){toast('Nem találtam lakásneveket');return}
+    if(d.mode==='new'&&today){
+      if(!confirm('Van folyamatban lévő nap. Eldobod és újat kezdesz? (Lezárni a „Munka vége” gombbal tudod mentéssel.)'))return;
+    }
+    newDay(names,date,d.mode==='add');
+    const miss=names.filter(n=>!findApt({name:n})).length;
+    toast(`${names.length} lakás${miss?` · ${miss} még nincs az adatbázisban`:''}`);return;
+  }
+  if(act==='start'){startShift();return}
+  if(act==='end'){endShift();return}
+  if(act==='optimize'){optimize();return}
+  if(act==='arrive'&&stop){stop.arrivedAt=Date.now();save();render();return}
+  if(act==='cleaner'&&stop){stop.cleaner=stop.cleaner===d.v?null:d.v;save();render();return}
+  if(act==='done'&&stop){markDone(stop.id);return}
+  if(act==='undo'&&stop){stop.status='pending';delete stop.doneAt;delete stop.legKm;delete stop.approx;save();render();return}
+  if(act==='edit'&&stop){ui.edit=ui.edit===stop.id?null:stop.id;render();return}
+  if(act==='del'&&stop){if(confirm(stop.name+' törlése a mai listáról?')){today.stops=today.stops.filter(s=>s!==stop);save();render()}return}
+  if(act==='move'&&stop){
+    const i=today.stops.indexOf(stop),j=i+(+d.d);
+    if(j>=0&&j<today.stops.length){[today.stops[i],today.stops[j]]=[today.stops[j],today.stops[i]];save();render()}return;
+  }
+  if(act==='aptOpen'){ui.aptOpen=ui.aptOpen===d.key?null:d.key;render();return}
+  if(act==='aptDel'){if(confirm('Törlöd a lakást?')){delete apts[d.key];ui.aptOpen=null;save();render()}return}
+  if(act==='aptNew'){
+    const n=prompt('Új lakás neve:');if(!n)return;
+    const k=norm(n);if(!k)return;
+    apts[k]=apts[k]||{name:n.trim(),address:'',code:'',help:'',note:''};ui.aptOpen=k;save();render();return;
+  }
+  if(act==='histOpen'){ui.histOpen=ui.histOpen===+d.i?null:+d.i;render();return}
+  if(act==='histDel'){if(confirm('Törlöd ezt a napot?')){days.splice(+d.i,1);ui.histOpen=null;save();render()}return}
+  if(act==='export'){
+    const b=new Blob([JSON.stringify({apts,days,cfg},null,1)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='agynemu-futar-mentes.json';a.click();return;
+  }
+});
+document.addEventListener('change',async e=>{
+  const t=e.target;
+  if(t.dataset.f){
+    const k=t.dataset.key;
+    if(!apts[k])apts[k]={name:t.dataset.name||k,address:'',code:'',help:'',note:''};
+    apts[k][t.dataset.f]=t.value.trim();
+    if(t.dataset.f==='address'){delete apts[k].lat;delete apts[k].lon;delete apts[k].geoAddr}
+    save();return;
+  }
+  if(t.dataset.cfg){cfg[t.dataset.cfg]=t.value.trim();save();return}
+  if(t.id==='xl'&&t.files[0]){await importFile(t.files[0]);return}
+  if(t.id==='bk'&&t.files[0]){
+    try{
+      const j=JSON.parse(await t.files[0].text());
+      if(!confirm('A mentés felülírja a mostani adatokat. Folytatod?'))return;
+      apts=j.apts||{};days=j.days||[];cfg=Object.assign(cfg,j.cfg||{});save();render();toast('Visszaállítva');
+    }catch(err){toast('Hibás fájl')}
+  }
+});
+document.addEventListener('input',e=>{
+  if(e.target.id==='q'){ui.q=e.target.value;$('#aptlist').innerHTML=aptListHtml()}
+});
+render();
+</script>
+</body>
+</html>
