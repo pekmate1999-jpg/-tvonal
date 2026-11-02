@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0f172a">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="app-version" content="1.1.0">
 <title>Ágynemű futár</title>
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--tx:#111827;--mut:#6b7280;--bd:#e5e7eb;--ac:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
@@ -61,6 +62,18 @@ let apts=LS.get('apts',{}), today=LS.get('today',null), days=LS.get('days',[]);
 let cfg=Object.assign({template:'{név} Kész',city:'Budapest',startAddr:''},LS.get('cfg',{}));
 let ui={tab:'today',open:null,edit:null,aptOpen:null,histOpen:null,q:''};
 const save=()=>{LS.set('apts',apts);LS.set('today',today);LS.set('days',days);LS.set('cfg',cfg)};
+/* ===== verzió + adatmigráció (az adat sosem vész el frissítéskor) ===== */
+const APP_VERSION=(document.querySelector('meta[name=app-version]')||{}).content||'?';
+const SCHEMA=1; // növeld, ha az adatformátum megváltozik, és írj hozzá átalakítót a migrate()-be
+function migrate(){
+  const from=LS.get('schema',0);
+  if(from>=SCHEMA)return;
+  try{localStorage.setItem('backup_before_schema_'+SCHEMA,JSON.stringify({apts,today,days,cfg,at:Date.now()}))}catch(e){}
+  // if(from<2){ ... régi adat átalakítása ... }
+  LS.set('schema',SCHEMA);
+}
+migrate();
+try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>Math.random().toString(36).slice(2,9);
 const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -375,10 +388,32 @@ function viewSet(){
   <div class="card pad"><div class="lbl" style="margin-top:0">Biztonsági mentés</div>
   <div class="row" style="margin-top:4px"><button class="flex1" data-act="export">⬇ Mentés (JSON)</button></div>
   <input type="file" id="bk" accept=".json" style="margin-top:8px">
-  <div class="mut small" style="margin-top:6px">Az adatok csak ebben a böngészőben vannak tárolva. Böngészőadat törlése előtt ments!</div></div>`;
+  <div class="mut small" style="margin-top:6px">${lastBackupTxt()} Az adatok csak ebben a böngészőben vannak tárolva. Böngészőadat törlése előtt ments!</div></div>
+  <div class="card pad"><div class="lbl" style="margin-top:0">Verzió</div><b>${esc(APP_VERSION)}</b>
+  <div class="row"><button class="flex1" data-act="checkUpdate">🔄 Frissítések keresése</button></div>
+  <div class="mut small" style="margin-top:6px">A frissítés nem törli az adataidat.</div></div>`;
+}
+async function checkUpdate(silent){
+  try{
+    const r=await fetch(location.pathname+'?t='+Date.now(),{cache:'no-store'});
+    const m=(await r.text()).match(/name="app-version" content="([^"]+)"/);
+    if(!m){if(!silent)toast('Nem sikerült ellenőrizni');return}
+    if(m[1]===APP_VERSION){if(!silent)toast('A legfrissebb verziót használod ('+APP_VERSION+')');return}
+    if(silent){ui.newVer=m[1];render();return}
+    save();toast('Frissítés: '+m[1]+'…',1);await sleep(500);
+    location.replace(location.pathname+'?v='+encodeURIComponent(m[1]));
+  }catch(e){if(!silent)toast('Nincs net, nem sikerült ellenőrizni')}
+}
+function lastBackupTxt(){const t=LS.get('lastBackup',0);return t?`Utolsó mentés: ${new Date(t).toLocaleDateString('hu-HU')}.`:'Még nem volt mentés.'}
+function banners(){
+  let h='';
+  if(ui.newVer)h+=`<div class="card pad" style="border-color:var(--ac)">🆕 Új verzió érhető el (${esc(ui.newVer)}). Az adataid megmaradnak.<div class="row"><button class="pri flex1" data-act="update">🔄 Frissítés most</button></div></div>`;
+  const lb=LS.get('lastBackup',0);
+  if(Object.keys(apts).length&&Date.now()-lb>7*864e5)h+=`<div class="card pad">💾 ${lb?'Több mint egy hete nem volt mentés.':'Még nem készült mentés.'}<div class="row"><button class="flex1" data-act="export">⬇ Mentés most</button></div></div>`;
+  return h;
 }
 function render(){
-  $('#app').innerHTML=ui.tab==='today'?viewToday():ui.tab==='apts'?viewApts():ui.tab==='hist'?viewHist():viewSet();
+  $('#app').innerHTML=banners()+(ui.tab==='today'?viewToday():ui.tab==='apts'?viewApts():ui.tab==='hist'?viewHist():viewSet());
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===ui.tab));
 }
 setInterval(()=>{const c=$('#clock');if(c&&today&&today.startedAt&&!today.endedAt)c.textContent=fmtDur(Date.now()-today.startedAt)},15000);
@@ -422,9 +457,10 @@ document.addEventListener('click',e=>{
   }
   if(act==='histOpen'){ui.histOpen=ui.histOpen===+d.i?null:+d.i;render();return}
   if(act==='histDel'){if(confirm('Törlöd ezt a napot?')){days.splice(+d.i,1);ui.histOpen=null;save();render()}return}
+  if(act==='update'||act==='checkUpdate'){checkUpdate(false);return}
   if(act==='export'){
-    const b=new Blob([JSON.stringify({apts,days,cfg},null,1)],{type:'application/json'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='agynemu-futar-mentes.json';a.click();return;
+    LS.set('lastBackup',Date.now());const b=new Blob([JSON.stringify({apts,days,cfg,today},null,1)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='agynemu-futar-mentes-'+new Date().toISOString().slice(0,10)+'.json';a.click();render();return;
   }
 });
 document.addEventListener('change',async e=>{
@@ -442,7 +478,7 @@ document.addEventListener('change',async e=>{
     try{
       const j=JSON.parse(await t.files[0].text());
       if(!confirm('A mentés felülírja a mostani adatokat. Folytatod?'))return;
-      apts=j.apts||{};days=j.days||[];cfg=Object.assign(cfg,j.cfg||{});save();render();toast('Visszaállítva');
+      apts=j.apts||{};days=j.days||[];cfg=Object.assign(cfg,j.cfg||{});if(j.today)today=j.today;save();render();toast('Visszaállítva');
     }catch(err){toast('Hibás fájl')}
   }
 });
@@ -450,6 +486,7 @@ document.addEventListener('input',e=>{
   if(e.target.id==='q'){ui.q=e.target.value;$('#aptlist').innerHTML=aptListHtml()}
 });
 render();
+if(navigator.onLine)checkUpdate(true);
 </script>
 </body>
 </html>
