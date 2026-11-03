@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.4.0">
+<meta name="app-version" content="1.6.0">
 <title>Ágynemű futár</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--tx:#111827;--mut:#6b7280;--bd:#e5e7eb;--ac:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--hd:#3a9d23;--nav:#e3f4bd;--navtx:#2b5d12}
 @media(prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#161d33;--tx:#e5e7eb;--mut:#9ca3af;--bd:#26304d;--ac:#3b82f6;--hd:#2d7a1a;--nav:#d9efa8;--navtx:#27510f}}
@@ -222,14 +225,24 @@ async function legKm(from,to){const L=await legsOf([from,to]);return{km:L[0].km,
 function solvePath(d,start,end,nodes){
   const n=nodes.length;
   if(n<2)return nodes.slice();
+  if(n<=15)return exactPath(d,start,end,nodes);
   const cost=o=>{let s=d[start][o[0]];for(let i=1;i<o.length;i++)s+=d[o[i-1]][o[i]];return s+d[o[o.length-1]][end]};
-  const twoOpt=o=>{
+  const improve=o=>{
     let c=cost(o),imp=true;
     while(imp){imp=false;
-      for(let i=0;i<o.length-1;i++)for(let j=i+1;j<o.length;j++){
+      for(let i=0;i<o.length-1;i++)for(let j=i+1;j<o.length;j++){           // 2-opt
         const cand=o.slice(0,i).concat(o.slice(i,j+1).reverse(),o.slice(j+1)),cc=cost(cand);
         if(cc<c-1e-9){o=cand;c=cc;imp=true}
-      }}
+      }
+      for(let L=1;L<=3;L++)for(let i=0;i+L<=o.length;i++){                   // Or-opt: 1-3 megálló áthelyezése
+        const seg=o.slice(i,i+L),rest=o.slice(0,i).concat(o.slice(i+L));
+        for(let j=0;j<=rest.length;j++){if(j===i)continue;
+          const cand=rest.slice(0,j).concat(seg,rest.slice(j)),cc=cost(cand);
+          if(cc<c-1e-9){o=cand;c=cc;imp=true;break}
+        }
+        if(imp)break;
+      }
+    }
     return[o,c];
   };
   const nn=first=>{
@@ -239,8 +252,24 @@ function solvePath(d,start,end,nodes){
     return o;
   };
   let best=null,bc=Infinity;
-  for(const f of(n<=25?[null,...nodes]:[null])){const[o,c]=twoOpt(nn(f));if(c<bc){bc=c;best=o}}
+  for(const f of[null,...nodes]){const[o,c]=improve(nn(f));if(c<bc){bc=c;best=o}}
   return best;
+}
+// Garantáltan a legrövidebb idejű sorrend (dinamikus programozás, Held–Karp)
+function exactPath(d,start,end,nodes){
+  const n=nodes.length,F=1<<n,dp=new Float64Array(F*n).fill(Infinity),par=new Int8Array(F*n).fill(-1);
+  for(let j=0;j<n;j++)dp[(1<<j)*n+j]=d[start][nodes[j]];
+  for(let m=1;m<F;m++)for(let j=0;j<n;j++){
+    if(!(m&(1<<j)))continue;const cur=dp[m*n+j];if(cur===Infinity)continue;
+    for(let k=0;k<n;k++){if(m&(1<<k))continue;
+      const nm=m|(1<<k),v=cur+d[nodes[j]][nodes[k]];
+      if(v<dp[nm*n+k]){dp[nm*n+k]=v;par[nm*n+k]=j}}
+  }
+  let bj=0,bv=Infinity;
+  for(let j=0;j<n;j++){const v=dp[(F-1)*n+j]+d[nodes[j]][end];if(v<bv){bv=v;bj=j}}
+  const o=[];let m=F-1,j=bj;
+  while(j>=0){o.push(nodes[j]);const p=par[m*n+j];m&=~(1<<j);j=p}
+  return o.reverse();
 }
 // Körökre bontás: kapacitás (csomag/kör), vagy a meglévő újratöltések száma alapján
 function splitRounds(list,used,cap,nRounds){
@@ -506,6 +535,7 @@ function importRows(rows,opt){
   let hi=-1,map=null;
   for(let i=0;i<Math.min(15,rows.length);i++){
     const ty=rows[i].map(c=>colType(c.t));
+    if(rows[i].some(c=>/\d{3,}/.test(c.t)))continue; // kódot / irányítószámot tartalmazó sor adat, nem fejléc
     if(ty.filter(x=>x&&x!=='?'&&x!=='skip').length>=2&&(ty.includes('name')||ty.includes('addr'))){hi=i;break}
   }
   const hdr=hi>=0?rows[hi].map(c=>cleanV(c.t)):[];
@@ -513,6 +543,8 @@ function importRows(rows,opt){
   if(hi>=0){
     hdr.forEach((hd,i)=>{const f=colType(hd);if(!f||f==='skip')return;(map[f]=map[f]||[]).push(i)});
     if(!map.name)map.name=[0];
+  }else if(Math.max(0,...rows.slice(0,20).map(r=>r.length))>=7){
+    map={name:[0],gate:[1],code:[2],spare:[3],help:[4],guest:[5],addr:[6],keySpot:[7],wifi:[8],pass:[9],vacuum:[10]}; // Lakás infók sorrend
   }else map={name:[0],addr:[1],code:[2],help:[3]};
   const nameCol=map.name[0];
   const val=(r,f)=>{const cols=map[f]||[];return cols.map(c=>{const v=cleanV(r[c]&&r[c].t);if(!v)return'';return(cols.length>1&&hdr[c]&&f!=='addr')?`${hdr[c]}: ${v}`:v}).filter(Boolean).join(f==='addr'?', ':'\n')};
@@ -554,10 +586,10 @@ function importRows(rows,opt){
   }
   return{n,changed};
 }
-function parseCSV(t){
+function parseCSV(t,force){
   t=t.replace(/^﻿/,'');
   const first=t.split(/\r?\n/)[0]||'';
-  const d=[';','\t',','].map(c=>[c,first.split(c).length-1]).sort((a,b)=>b[1]-a[1])[0][0];
+  const d=force||[';','\t',','].map(c=>[c,first.split(c).length-1]).sort((a,b)=>b[1]-a[1])[0][0];
   const rows=[];let row=[],cell='',q=false;
   for(let i=0;i<t.length;i++){
     const c=t[i];
@@ -603,6 +635,19 @@ function importBuffer(buf){
   r.links=hasLinks;
   LS.set('dataAt',Date.now());
   return r;
+}
+function importText(txt){
+  txt=String(txt||'');
+  if(!txt.trim())throw new Error('üres a beillesztett szöveg');
+  const rows=parseCSV(txt,txt.includes('\t')?'\t':null);
+  const r=importRows(rows,{old:false,hasLinks:false,seen:new Set()});
+  if(!r.n)throw new Error('nem találtam lakás-sorokat – a fejléc-sort (Lakás, Kapukód…) is másold ki');
+  LS.set('dataAt',Date.now());
+  return r;
+}
+function afterImport(r,how){
+  save();render();
+  toast(`${how}: ${r.n} lakás frissítve${r.changed?` · 🔄 ${r.changed} kód változott`:''}`);
 }
 async function importFile(f){
   try{
@@ -743,7 +788,7 @@ function stopCard(s){
   ${a&&a.door?`<div class="small mut">Ajtó: ${esc(a.door)}</div>`:''}
   ${done?`<div class="log">${logLine(s)}</div>`:codesLine(a)}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
   if(!done)h+=actRow(s,a);
-  else h+=`<div class="acts"><div class="row" style="margin-top:0"><a class="btn flex1" href="${viber}">💬 Viber</a></div></div>`;
+  else h+=`<div class="acts"><div class="row" style="margin-top:0"><button class="flex1" data-act="viber" data-id="${s.id}">💬 Viber: „${esc(viberText(s))}”</button></div></div>`;
   if(open){
     h+='<div class="body">';
     if(!a)h+=linkPicker(s);
@@ -816,9 +861,14 @@ function viewApts(){
   return`<h2>Lakások <span class="mut small">${n} db${nOld?` + ${nOld} régi`:''}${miss?` · ${miss} cím nélkül`:''}</span></h2>
   <div class="card pad"><div class="lbl" style="margin-top:0">Adatbázis: ${ds.ok?'✅':'⚠'} ${esc(ds.txt)}</div>
   ${cfg.dataUrl?'<div class="row" style="margin-top:6px"><button class="pri flex1" data-act="syncNow">🔄 Frissítés a linkről</button></div>':'<div class="mut small">Automatikus napi frissítéshez add meg az adatbázis linkjét a Beállításokban.</div>'}
-  <div class="lbl">Excel / CSV betöltése</div>
-  <input type="file" id="xl" accept=".xlsx,.xls,.csv,.ods">
-  <div class="mut small" style="margin-top:6px">A „Lakás infók” táblázatot (mindkét lapját) a fejléc alapján olvassa: kapukód, kulcsőr, pótkulcsőr, takarítós kulcs helye, cím, segédlet-link, wifi. Betöltéskor minden frissül, a megjegyzéseid és a kézzel beírt adataid megmaradnak. Ha egy kód megváltozik, jelzi.</div></div>
+  ${cfg.dataUrl?`<div class="row"><a class="btn flex1" href="${esc(cfg.dataUrl)}" target="_blank" rel="noopener">📊 Táblázat megnyitása</a></div>`:''}
+  <div class="lbl">Beillesztés (letöltés nélkül)</div>
+  <div class="mut small">Google Táblázatok appban: koppints a bal felső sarokra (a teljes lap kijelölése) → Másolás. Itt: illeszd be a mezőbe, vagy nyomd meg a „Vágólapról” gombot.</div>
+  <textarea id="pasteDb" placeholder="Ide illeszd be a kimásolt táblázatot…"></textarea>
+  <div class="row"><button class="pri flex1" data-act="pasteDb">📋 Beillesztett adatok betöltése</button><button class="flex1" data-act="clipDb">📥 Vágólapról</button></div>
+  <div class="lbl">…vagy Excel / CSV fájl</div>
+  <input type="file" id="xl" accept=".xlsx,.xls,.csv,.ods,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+  <div class="mut small" style="margin-top:6px">A „Lakás infók” táblázatot (mindkét lapját) a fejléc alapján olvassa: kapukód, kulcsőr, pótkulcsőr, takarítós kulcs helye, cím, segédlet-link, wifi. Betöltéskor minden frissül, a megjegyzéseid és a kézzel beírt adataid megmaradnak. Ha egy kód megváltozik, jelzi. Beillesztésnél a segédlet-linkek nem jönnek át, de a korábban betöltött linkek megmaradnak.</div></div>
   <div class="row" style="margin:0 0 10px"><input id="q" placeholder="Keresés…" value="${esc(ui.q)}" style="margin:0;flex:1"><button data-act="aptNew">+ Új</button></div>
   <div id="aptlist">${aptListHtml()}</div>`;
 }
@@ -854,8 +904,12 @@ function viewSet(){
   ${num('stripMin','Extra idő, ha nekem kell lehúzni (perc)')}
   ${num('reloadMin','Újratöltés ideje a raktárban (perc)')}
   <div class="lbl">Viber üzenet sablon ({név} = lakás neve)</div><input data-cfg="template" value="${esc(cfg.template)}">
+  <div class="lbl">Viber küldés módja</div><select data-cfg="viberMode" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
+    <option value="share" ${cfg.viberMode!=='link'?'selected':''}>Megosztás menü (ajánlott) – Viber → csoport kiválasztása</option>
+    <option value="link" ${cfg.viberMode==='link'?'selected':''}>Közvetlen Viber link</option></select>
+  <div class="mut small" style="margin-top:4px">Az üzenet szövege mindig a vágólapra is kerül, így végszükség esetén csak be kell illesztened.</div>
   <div class="lbl">Város (ha a cím nem tartalmazza)</div><input data-cfg="city" value="${esc(cfg.city)}"></div>
-  <div class="card pad"><div class="lbl" style="margin-top:0">Adatbázis automatikus frissítése (link)</div>
+  <div class="card pad"><div class="lbl" style="margin-top:0">A táblázat linkje (megnyitás + automatikus frissítés)</div>
   <input data-cfg="dataUrl" value="${esc(cfg.dataUrl)}" placeholder="https://… (CSV / Excel / Google Táblázat link)">
   <div class="mut small" style="margin-top:6px">Ha megadod, az app minden megnyitáskor és új nap betöltésekor letölti a friss címeket és kódokat. Tartsd titokban a linket: aki ismeri, látja a táblázatot.</div>
   <div class="row"><button class="flex1" data-act="syncNow">🔄 Frissítés most</button></div></div>
@@ -863,9 +917,24 @@ function viewSet(){
   <div class="row" style="margin-top:4px"><button class="flex1" data-act="export">⬇ Mentés (JSON)</button></div>
   <input type="file" id="bk" accept=".json" style="margin-top:8px">
   <div class="mut small" style="margin-top:6px">${lastBackupTxt()} Az adatok csak ebben a böngészőben vannak tárolva. Böngészőadat törlése előtt ments!</div></div>
+  <div class="card pad"><div class="lbl" style="margin-top:0">Telepítés a telefonra</div>
+  ${isStandalone()?'✅ Telepített appként fut.':installEvt?'<div class="row" style="margin-top:4px"><button class="okb flex1" data-act="install">📲 Telepítés</button></div>':'<div class="small">Chrome-ban: ⋮ menü → <b>Alkalmazás telepítése</b> (vagy „Hozzáadás a kezdőképernyőhöz”). Ha nem látod, frissítsd az oldalt egyszer.</div>'}</div>
   <div class="card pad"><div class="lbl" style="margin-top:0">Verzió</div><b>${esc(APP_VERSION)}</b>
   <div class="row"><button class="flex1" data-act="checkUpdate">🔄 Frissítések keresése</button></div>
   <div class="mut small" style="margin-top:6px">A frissítés nem törli az adataidat.</div></div>`;
+}
+const viberText=s=>cfg.template.replace('{név}',s.name);
+function openViberLink(text){
+  const enc=encodeURIComponent(text);
+  location.href=/Android/i.test(navigator.userAgent)?`intent://forward?text=${enc}#Intent;scheme=viber;package=com.viber.voip;end`:`viber://forward?text=${enc}`;
+}
+function sendViber(text){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).catch(()=>{})}catch(e){}
+  if(cfg.viberMode!=='link'&&navigator.share){
+    navigator.share({text}).catch(e=>{if(!e||e.name!=='AbortError')openViberLink(text)});
+    return;
+  }
+  openViberLink(text);
 }
 async function checkUpdate(silent){
   try{
@@ -879,8 +948,13 @@ async function checkUpdate(silent){
   }catch(e){if(!silent)toast('Nincs net, nem sikerült ellenőrizni')}
 }
 function lastBackupTxt(){const t=LS.get('lastBackup',0);return t?`Utolsó mentés: ${new Date(t).toLocaleDateString('hu-HU')}.`:'Még nem volt mentés.'}
+let installEvt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;safeRender()});
+window.addEventListener('appinstalled',()=>{installEvt=null;toast('Telepítve ✔ – a kezdőképernyőről / app-listából indítsd');safeRender()});
+const isStandalone=()=>{try{return matchMedia('(display-mode: standalone)').matches||navigator.standalone===true}catch(e){return false}};
 function banners(){
   let h='';
+  if(installEvt&&!isStandalone()&&!LS.get('installDismiss',0))h+=`<div class="card pad" style="border-color:var(--hd)">📲 <b>Telepítsd az appot a telefonodra</b> – saját ikonnal, teljes képernyőn indul, az adataid megmaradnak.<div class="row"><button class="okb flex1" data-act="install">📲 Telepítés</button><button data-act="installNo">Később</button></div></div>`;
   const ds=dataStatus();
   if(Object.keys(apts).length&&!ds.ok)h+=`<div class="card pad" style="border-color:var(--warn)">⚠ <b>Az adatbázis nem mai</b> (${esc(ds.txt)}). A belépőkódok időközben változhattak!
     <div class="row">${cfg.dataUrl?'<button class="pri flex1" data-act="syncNow">🔄 Frissítés most</button>':'<button class="pri flex1" data-act="tab" data-tab="apts">📂 Új Excel betöltése</button>'}</div></div>`;
@@ -921,12 +995,24 @@ document.addEventListener('click',e=>{
   if(act==='end'){endShift();return}
   if(act==='optimize'){optimize();return}
   if(act==='syncNow'){syncData(true);return}
+  if(act==='pasteDb'){try{const r=importText($('#pasteDb').value);afterImport(r,'Beillesztés')}catch(e){toast('Nem sikerült: '+e.message)}return}
+  if(act==='clipDb'){
+    (async()=>{
+      try{
+        if(!navigator.clipboard||!navigator.clipboard.readText)throw new Error('nincs vágólap-hozzáférés');
+        const r=importText(await navigator.clipboard.readText());afterImport(r,'Vágólap');
+      }catch(e){toast('Vágólap nem olvasható ('+e.message+') – illeszd be kézzel a mezőbe (hosszú nyomás → Beillesztés)')}
+    })();return;
+  }
   if(act==='arrive'&&stop){stop.arrivedAt=Date.now();ui.open=stop.id;save();render();return}
   if(act==='cleaner'&&stop){stop.cleaner=stop.cleaner===d.v?null:d.v;stop.cleanerAt=stop.cleaner?Date.now():null;save();render();replan();return}
   if(act==='packs'&&stop){stop.packs=Math.max(1,(stop.packs||1)+(+d.d));save();render();return}
   if(act==='done'&&stop){markDone(stop.id);return}
-  if(act==='doneViber'&&stop){markDone(stop.id);location.href='viber://forward?text='+encodeURIComponent(cfg.template.replace('{név}',stop.name));return}
+  if(act==='doneViber'&&stop){const tx=viberText(stop);sendViber(tx);markDone(stop.id);return}
+  if(act==='viber'&&stop){sendViber(viberText(stop));return}
+  if(act==='install'&&installEvt){installEvt.prompt();installEvt.userChoice.finally(()=>{installEvt=null;render()});return}
   if(act==='csv'){exportCSV();return}
+  if(act==='installNo'){LS.set('installDismiss',Date.now());render();return}
   if(act==='unlink'&&stop){delete cfg.alias[norm(stop.name)];save();render();replan();return}
   if(act==='undo'&&stop){stop.status='pending';delete stop.doneAt;delete stop.legKm;delete stop.approx;delete stop.round;save();render();replan();return}
   if(act==='edit'&&stop){ui.edit=ui.edit===stop.id?null:stop.id;render();return}
@@ -993,6 +1079,7 @@ document.addEventListener('input',e=>{
 });
 migrate();
 render();
+if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(()=>{});
 if(navigator.onLine){
   checkUpdate(true);
   if(cfg.dataUrl)syncData(false);
