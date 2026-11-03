@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.3.0">
+<meta name="app-version" content="1.4.0">
 <title>Ágynemű futár</title>
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--tx:#111827;--mut:#6b7280;--bd:#e5e7eb;--ac:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--hd:#3a9d23;--nav:#e3f4bd;--navtx:#2b5d12}
@@ -61,6 +61,9 @@ h2{font-size:18px;margin:6px 2px 10px}
 .stepper{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .log{font-size:12px;color:var(--mut);margin-top:4px;line-height:1.5}
 .late{color:var(--bad);font-weight:700}.early{color:var(--ok);font-weight:700}
+.cl{font:600 13px/1.45 ui-monospace,Menlo,monospace;margin-top:4px}
+.code.m{font-size:20px}.mono{font-family:ui-monospace,Menlo,monospace}
+.old{font-size:11px;background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:0 5px;color:var(--mut)}
 </style>
 </head>
 <body>
@@ -80,8 +83,10 @@ const LS={get(k,d){try{const v=JSON.parse(localStorage.getItem(k));return v??d}c
 let apts=LS.get('apts',{}), today=LS.get('today',null), days=LS.get('days',[]);
 const DEF={template:'{név} Kész',city:'Budapest',depotAddr:'Bajcsy-Zsilinszky út 35, Budapest',cap:0,stopMin:8,stripMin:12,reloadMin:15,dataUrl:''};
 let cfg=Object.assign({},DEF,LS.get('cfg',{}));
+if(!cfg.alias||typeof cfg.alias!=='object')cfg.alias={};
 let ui={tab:'today',open:null,edit:null,aptOpen:null,histOpen:null,q:'',paste:'',newVer:null};
-const save=()=>{LS.set('apts',apts);LS.set('today',today);LS.set('days',days);LS.set('cfg',cfg)};
+let matchCache=new Map();
+const save=()=>{matchCache.clear();LS.set('apts',apts);LS.set('today',today);LS.set('days',days);LS.set('cfg',cfg)};
 const APP_VERSION=(document.querySelector('meta[name=app-version]')||{}).content||'?';
 const SCHEMA=2; // növeld, ha az adatformátum megváltozik, és írj hozzá átalakítót a migrate()-be
 try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
@@ -128,11 +133,28 @@ function parseMsg(t){
   }
   return{date,names};
 }
+/* Viber-név → táblázat-név: pontos, kézi összerendelés, segédlet-név (pl. „Holló bejutási infók”),
+   majd betű-előtag + azonos sorszám (DOHÁNY-2 → DOH-2, KÁROLY-1 → KAR-1, NYÁRY → NYA) */
+const splitKey=k=>{const m=String(k).match(/^([A-Z]+?)(\d*)$/);return m?{L:m[1],D:m[2]}:null};
+function pickKey(c){const act=c.filter(([,a])=>!a.old),l=act.length?act:c;return l.length===1?l[0][0]:null}
+function fuzzyKey(k){
+  const E=Object.entries(apts);
+  let c=E.filter(([,a])=>(a.aliases||[]).includes(k));
+  if(c.length){const r=pickKey(c);if(r)return r}
+  const s=splitKey(k);
+  if(s&&s.L.length>=3){
+    c=E.filter(([key,a])=>[key,...(a.aliases||[])].some(x=>{const t=splitKey(x);return t&&t.D===s.D&&t.L.length>=3&&(t.L.startsWith(s.L)||s.L.startsWith(t.L))}));
+    if(c.length){const r=pickKey(c);if(r)return r}
+  }
+  c=E.filter(([key])=>key.startsWith(k));
+  return c.length?pickKey(c):null;
+}
 function findApt(name){
   const k=norm(name);if(!k)return null;
+  const al=cfg.alias[k];if(al&&apts[al])return apts[al];
   if(apts[k])return apts[k];
-  const c=Object.values(apts).filter(a=>norm(a.name).startsWith(k));
-  return c.length===1?c[0]:null;
+  if(!matchCache.has(k))matchCache.set(k,fuzzyKey(k));
+  const r=matchCache.get(k);return r?apts[r]:null;
 }
 const getApt=s=>s.type==='depot'?null:findApt(s.name);
 function aptKey(s){const a=getApt(s);return a?norm(a.name):norm(s.name)}
@@ -456,46 +478,78 @@ function dayStats(t){
 }
 
 /* ===== Excel / CSV import + napi adatbázis-frissítés ===== */
-const RX={addr:/c[ií]m|address|utca/i,code:/k[oó]d|bel[eé]p|code|pin|kulcs/i,door:/ajt[oó]|emelet|door|lak[aá]ssz[aá]m|szint/i,help:/seg[eé]d|bejut|le[ií]r|[uú]tmutat|megjegyz|info|egy[eé]b/i,name:/n[eé]v|lak[aá]s|apartman|megnevez|azonos/i};
-function importRows(rows){
-  rows=rows.filter(r=>r.some(c=>String(c).trim()));
-  let hi=-1;
-  for(let i=0;i<Math.min(10,rows.length);i++){
-    const cells=rows[i].map(String);
-    if(cells.filter(c=>c.trim()).length>=2&&cells.some(c=>RX.addr.test(c)||RX.name.test(c))){hi=i;break}
+const COLS=[
+  ['skip',/min[oő]s[ií]t|[aá]remel|^rules$|^info$|^[aá]fa$|^ifa$/i],
+  ['wifi2',/m[aá]sodlagos\s*wi-?fi/i],
+  ['wifi',/wi-?fi/i],
+  ['pass',/jelsz/i],
+  ['vacuum',/porsz/i],
+  ['keySpot',/takar[ií]t[oó]s|kulcs\s*helye|lakat/i],
+  ['spare',/p[oó]tkulcs/i],
+  ['gate',/kapu/i],
+  ['code',/kulcs[oő]r|ajt[oó]k[oó]d|k[oó]d|bel[eé]p|code|pin/i],
+  ['help',/bejut|seg[eé]d|le[ií]r[aá]s|[uú]tmutat/i],
+  ['guest',/vend[eé]g|sabee/i],
+  ['addr',/c[ií]m|address|utca/i],
+  ['door',/ajt[oó]sz|emelet|door|szint/i],
+  ['extra',/megjegyz|egy[eé]b/i],
+  ['name',/lak[aá]s|n[eé]v|apartman|megnevez|azonos/i]
+];
+const CODE_FIELDS=['gate','code','spare','keySpot'];
+const FL={gate:'Kapukód',code:'Kulcsőr / ajtókód',spare:'Pótkulcsőr',keySpot:'Takarítós kulcs helye',address:'Cím',door:'Ajtó',help:'Segédlet',helpUrl:'Segédlet link'};
+const colType=h=>{h=String(h||'').trim();if(!h)return null;for(const[f,rx]of COLS)if(rx.test(h))return f;return'?'};
+const cleanV=v=>{v=String(v??'').replace(/\s+/g,' ').trim();if(/^-?\d+\.0+$/.test(v))v=v.replace(/\.0+$/,'');return /^[-–x]$/i.test(v)?'':v};
+const helpAlias=t=>{const m=String(t||'').match(/^(.*?)\s*bejut\S*(\s+\S+)?\s*$/i);return m&&m[1].trim()?norm(m[1]):''};
+function importRows(rows,opt){
+  opt=opt||{};const seen=opt.seen||new Set();const T=r=>(r||[]).map(c=>typeof c==='object'&&c?c:{t:String(c??''),l:''});
+  rows=rows.map(T);
+  let hi=-1,map=null;
+  for(let i=0;i<Math.min(15,rows.length);i++){
+    const ty=rows[i].map(c=>colType(c.t));
+    if(ty.filter(x=>x&&x!=='?'&&x!=='skip').length>=2&&(ty.includes('name')||ty.includes('addr'))){hi=i;break}
   }
-  let map={name:[0],addr:[1],code:[2],door:[],help:[3],rest:[]},hdr=[];
+  const hdr=hi>=0?rows[hi].map(c=>cleanV(c.t)):[];
+  map={};
   if(hi>=0){
-    hdr=rows[hi].map(c=>String(c).trim());map={name:[],addr:[],code:[],door:[],help:[],rest:[]};
-    hdr.forEach((h,i)=>{
-      if(!h)return;
-      if(RX.addr.test(h))map.addr.push(i);
-      else if(RX.code.test(h))map.code.push(i);
-      else if(RX.door.test(h))map.door.push(i);
-      else if(RX.help.test(h))map.help.push(i);
-      else if(RX.name.test(h)&&!map.name.length)map.name.push(i);
-      else map.rest.push(i);
-    });
-    if(!map.name.length){map.name=[map.rest.shift()??0]}
-  }
-  const has=k=>map[k].length>0;
-  const join=(r,cols)=>cols.map(c=>{const v=String(r[c]??'').trim();if(!v)return'';return(cols.length>1&&hdr[c])?`${hdr[c]}: ${v}`:v}).filter(Boolean).join('\n');
-  let n=0,changed=0;
+    hdr.forEach((hd,i)=>{const f=colType(hd);if(!f||f==='skip')return;(map[f]=map[f]||[]).push(i)});
+    if(!map.name)map.name=[0];
+  }else map={name:[0],addr:[1],code:[2],help:[3]};
+  const nameCol=map.name[0];
+  const val=(r,f)=>{const cols=map[f]||[];return cols.map(c=>{const v=cleanV(r[c]&&r[c].t);if(!v)return'';return(cols.length>1&&hdr[c]&&f!=='addr')?`${hdr[c]}: ${v}`:v}).filter(Boolean).join(f==='addr'?', ':'\n')};
+  let n=0,changed=0,sect='',prevEmpty=true;
   for(const r of rows.slice(hi+1)){
-    const name=String(r[map.name[0]]??'').trim();if(!name)continue;
-    const k=norm(name);if(!k)continue;
-    const extra=map.rest.map(c=>{const v=String(r[c]??'').trim();return v?`${hdr[c]||''}: ${v}`:''}).filter(Boolean).join('\n');
+    const empty=!r.some(c=>cleanV(c.t)||c.l);
+    if(empty){sect='';prevEmpty=true;continue}
+    const name=cleanV(r[nameCol]&&r[nameCol].t),k=norm(name);
     const nv={};
-    if(has('addr'))nv.address=join(r,map.addr).replace(/\n/g,', ');
-    if(has('code'))nv.code=join(r,map.code);
-    if(has('door'))nv.door=join(r,map.door);
-    const helpTxt=[has('help')?join(r,map.help):'',extra].filter(Boolean).join('\n');
-    if(has('help')||extra)nv.help=helpTxt;
+    for(const f of['addr','gate','code','spare','keySpot','door','guest','wifi','pass','wifi2','vacuum','help','extra'])if(map[f])nv[f]=val(r,f);
+    let link='';
+    if(map.help)for(const c of map.help){const l=r[c]&&r[c].l;if(l&&/^https?:\/\//i.test(l)){link=l;break}}
+    if(!link&&opt.hasLinks)for(const c of r)if(c.l&&/^https?:\/\/docs\.google/i.test(c.l)){link=c.l;break}
+    const core=nv.addr||nv.gate||nv.code||nv.spare||nv.keySpot||link;
+    if(!k){prevEmpty=false;continue}
+    if(!core&&prevEmpty){sect=name;prevEmpty=false;continue}  // szekció-cím (pl. „Bajcsy szobakódok”)
+    prevEmpty=false;
+    if(seen.has(k))continue; // a régi lap nem írja felül az aktuálisat
+    seen.add(k);
+    const aliases=[];const ha=helpAlias(nv.help);if(ha&&ha!==k)aliases.push(ha);
+    if(nv.help!==undefined&&(helpAlias(nv.help)||/^link$/i.test(nv.help)))nv.help='';
+    if(nv.extra){nv.help=[nv.help,nv.extra].filter(Boolean).join('\n')}delete nv.extra;
+    nv.address=nv.addr;delete nv.addr;if(nv.address===undefined)delete nv.address;
+    if(opt.hasLinks&&map.help)nv.helpUrl=link;
     const old=apts[k];
-    const base=old||{address:'',code:'',door:'',help:'',note:''};
-    const upd={...base,...nv,name};
-    if(old&&nv.code!==undefined&&old.code&&nv.code&&old.code!==nv.code){upd.prevCode=old.code;upd.codeChanged=Date.now();changed++}
-    if(old&&nv.address!==undefined&&old.address!==nv.address){delete upd.lat;delete upd.lon;delete upd.geoAddr}
+    const upd={...(old||{note:''}),name,sect,old:!!opt.old,aliases};
+    upd.manual={...((old&&old.manual)||{})};
+    const prev={};
+    for(const[f,v]of Object.entries(nv)){
+      if(v===undefined)continue;
+      if(!v&&upd.manual[f])continue;          // kézzel beírt adatot üres cella nem töröl
+      if(v)delete upd.manual[f];
+      if(old&&CODE_FIELDS.includes(f)&&old[f]&&v&&old[f]!==v)prev[f]=old[f];
+      upd[f]=v;
+    }
+    if(Object.keys(prev).length){upd.prev=prev;upd.codeChanged=Date.now();upd.prevCode=prev.code||'';changed++}
+    if(old&&old.address!==upd.address){delete upd.lat;delete upd.lon;delete upd.geoAddr}
     apts[k]=upd;n++;
   }
   return{n,changed};
@@ -516,22 +570,37 @@ function parseCSV(t){
   if(cell!==''||row.length){row.push(cell);rows.push(row)}
   return rows;
 }
+function sheetRows(ws){
+  const out=[];if(!ws||!ws['!ref'])return out;
+  const R=XLSX.utils.decode_range(ws['!ref']);
+  for(let r=R.s.r;r<=R.e.r;r++){
+    const row=[];
+    for(let c=R.s.c;c<=R.e.c;c++){
+      const cell=ws[XLSX.utils.encode_cell({r,c})];
+      row.push(cell?{t:cell.w!=null?String(cell.w):(cell.v!=null?String(cell.v):''),l:(cell.l&&cell.l.Target)||''}:{t:'',l:''});
+    }
+    out.push(row);
+  }
+  return out;
+}
 function importBuffer(buf){
   const u=new Uint8Array(buf);
   const bin=(u[0]===0x50&&u[1]===0x4B)||(u[0]===0xD0&&u[1]===0xCF);
-  let sets;
+  let sets,hasLinks=false;
   if(bin){
     if(typeof XLSX==='undefined')throw new Error('Az Excel-olvasó nem töltődött be (nincs net?)');
-    const wb=XLSX.read(u,{type:'array'});
-    sets=wb.SheetNames.map(nm=>XLSX.utils.sheet_to_json(wb.Sheets[nm],{header:1,defval:'',raw:false}));
+    const wb=XLSX.read(u,{type:'array'});hasLinks=true;
+    sets=wb.SheetNames.map(nm=>({rows:sheetRows(wb.Sheets[nm]),old:/r[eé]gi|archiv|old/i.test(nm)}));
+    sets.sort((a,b)=>a.old-b.old);
   }else{
     let txt;try{txt=new TextDecoder('utf-8',{fatal:true}).decode(u)}catch(e){txt=new TextDecoder('windows-1250').decode(u)}
     if(/^\s*<(!doctype|html)/i.test(txt))throw new Error('a link nem táblázatot adott vissza – ellenőrizd a megosztást');
-    sets=[parseCSV(txt)];
+    sets=[{rows:parseCSV(txt),old:false}];
   }
-  const r={n:0,changed:0};
-  for(const rows of sets){const x=importRows(rows);r.n+=x.n;r.changed+=x.changed}
+  const r={n:0,changed:0},seen=new Set();
+  for(const s of sets){const x=importRows(s.rows,{old:s.old,hasLinks,seen});r.n+=x.n;r.changed+=x.changed}
   if(!r.n)throw new Error('nem találtam lakás-sorokat a táblázatban');
+  r.links=hasLinks;
   LS.set('dataAt',Date.now());
   return r;
 }
@@ -541,25 +610,35 @@ async function importFile(f){
     save();render();toast(`${r.n} lakás betöltve${r.changed?` · 🔄 ${r.changed} kód változott`:''}`);
   }catch(e){toast('Nem sikerült beolvasni: '+e.message)}
 }
-function gsUrl(u){
+function gsUrls(u){
   const m=u.match(/docs\.google\.com\/spreadsheets\/d\/(?!e\/)([\w-]+)/);
-  if(m&&!/\/pub/.test(u)){const g=u.match(/[#?&]gid=(\d+)/);return`https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv${g?'&gid='+g[1]:''}`}
-  return u;
+  if(m&&!/\/pub/.test(u)){const g=u.match(/[#?&]gid=(\d+)/);
+    return[`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=xlsx`,`https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv${g?'&gid='+g[1]:''}`]}
+  const p=u.match(/docs\.google\.com\/spreadsheets\/d\/e\/([\w-]+)\/pub/);
+  if(p)return[`https://docs.google.com/spreadsheets/d/e/${p[1]}/pub?output=xlsx`,u];
+  return[u];
 }
 let syncing=false,lastSyncTry=0;
 async function syncData(manual){
   if(!cfg.dataUrl){if(manual)toast('Nincs adatbázis-link megadva (Beállítások)');return false}
   if(syncing)return false;
   syncing=true;lastSyncTry=Date.now();
+  let err='';
   try{
     if(manual)toast('Adatbázis frissítése…',1);
-    const r=await fetch(gsUrl(cfg.dataUrl),{cache:'no-store'});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const res=importBuffer(await r.arrayBuffer());
-    save();safeRender();
-    if(res.changed)toast(`🔄 ${res.changed} lakás belépőkódja megváltozott`);
-    else if(manual)toast(`Adatbázis frissítve · ${res.n} lakás`);
-    return true;
+    for(const url of gsUrls(cfg.dataUrl)){
+      try{
+        const r=await fetch(url,{cache:'no-store'});
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        const res=importBuffer(await r.arrayBuffer());
+        save();safeRender();
+        const lk=res.links?'':' (segédlet-linkek nélkül)';
+        if(res.changed)toast(`🔄 ${res.changed} lakás kódja megváltozott${lk}`);
+        else if(manual)toast(`Adatbázis frissítve · ${res.n} lakás${lk}`);
+        return true;
+      }catch(e){err=e.message}
+    }
+    throw new Error(err);
   }catch(e){toast('Adatbázis-frissítés sikertelen: '+e.message+' – a korábbi adatok maradnak');return false}
   finally{syncing=false}
 }
@@ -595,12 +674,52 @@ function actRow(s,a){
   return`<div class="acts"><div class="row" style="margin-top:0"><a class="btn navbtn ${url?'':'dis'}" ${url?`href="${esc(url)}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>Navigálás</a>${arr}</div>
   <div class="row">${depot?`<button class="okb flex1" data-act="done" data-id="${s.id}">✔ ${end?'Leadtam':'Újratöltöttem'}</button>`:`<button class="okb" style="flex:2" data-act="doneViber" data-id="${s.id}">✔ Kész + 💬 Viber</button><button class="flex1" data-act="done" data-id="${s.id}">✔ Kész</button>`}</div></div>`;
 }
+function codesLine(a){
+  if(!a)return'';
+  const p=[];if(a.gate)p.push('🚪 '+esc(a.gate));if(a.code)p.push('🔑 '+esc(a.code));if(a.spare)p.push('🗝 '+esc(a.spare));
+  return p.length?`<div class="cl">${p.join(' · ')}</div>`:'';
+}
+function depotCodes(){
+  const L=['B35','RAKKULSO'].map(k=>apts[k]).filter(a=>a&&(a.gate||a.code));
+  return L.length?`<div class="cl">${L.map(a=>`${esc(a.name)}: ${[a.gate?'🚪 '+esc(a.gate):'',a.code?'🔑 '+esc(a.code):''].filter(Boolean).join(' · ')}`).join('<br>')}</div>`:'';
+}
+function aptDetail(a){
+  if(!a)return'';
+  let h='';
+  if(a.codeChanged&&a.prev&&Date.now()-a.codeChanged<14*864e5)
+    h+=`<div class="lbl">🔄 Kódváltozás (${new Date(a.codeChanged).toLocaleDateString('hu-HU')})</div><div class="small">`+
+      Object.entries(a.prev).map(([f,v])=>`${FL[f]||f}: <s>${esc(v)}</s> → <b>${esc(a[f]||'–')}</b>`).join('<br>')+'</div>';
+  if(a.gate)h+=`<div class="lbl">Kapukód</div><div class="code m">${esc(a.gate)}</div>`;
+  if(a.code)h+=`<div class="lbl">Kulcsőr / ajtókód</div><div class="code">${esc(a.code)}</div>`;
+  if(a.spare)h+=`<div class="lbl">Pótkulcsőr</div><div class="code m">${esc(a.spare)}</div>`;
+  if(a.keySpot)h+=`<div class="lbl">Takarítós kulcs helye</div><div class="pre">${esc(a.keySpot)}</div>`;
+  if(a.door)h+=`<div class="lbl">Ajtószám / emelet</div><div>${esc(a.door)}</div>`;
+  if(a.helpUrl&&/^https?:\/\//i.test(a.helpUrl))h+=`<div class="row"><a class="btn flex1" href="${esc(a.helpUrl)}" target="_blank" rel="noopener">📄 Bejutási segédlet megnyitása</a></div>`;
+  if(a.help)h+=`<div class="lbl">Bejutási segédlet</div><div class="pre">${esc(a.help)}</div>`;
+  const misc=[a.wifi?`📶 ${esc(a.wifi)}${a.pass?' · <span class="mono">'+esc(a.pass)+'</span>':''}`:'',a.wifi2?`📶 ${esc(a.wifi2)}`:'',a.vacuum?`🧹 ${esc(a.vacuum)}`:'',
+    a.guest?`👤 ${esc(a.guest)}`:'',a.sect?`📁 ${esc(a.sect)}`:'',a.old?'🗄 a „Régi lakások” lapról':''].filter(Boolean);
+  if(misc.length)h+=`<div class="lbl">Egyéb</div><div class="small" style="line-height:1.7">${misc.join('<br>')}</div>`;
+  return h;
+}
+function editFields(a,fa){
+  a=a||{};
+  const I=(f,l,ph)=>`<div class="lbl">${l}</div><input data-f="${f}" ${fa} value="${esc(a[f]||'')}"${ph?` placeholder="${ph}"`:''}>`;
+  return I('address','Cím','pl. Dohány utca 12')+I('gate','Kapukód')+I('code','Kulcsőr / ajtókód')+I('spare','Pótkulcsőr')+I('keySpot','Takarítós kulcs helye')+
+    I('door','Ajtószám / emelet')+I('helpUrl','Segédlet link (https://…)')+`<div class="lbl">Segédlet szöveg</div><textarea data-f="help" ${fa}>${esc(a.help||'')}</textarea>`+
+    `<div class="mut small" style="margin-top:4px">A kézzel beírt adatot az Excel csak akkor írja felül, ha ott is van érték.</div>`;
+}
+function linkPicker(s){
+  const opts=Object.values(apts).sort((x,y)=>x.name.localeCompare(y.name,'hu')).map(a=>`<option value="${esc(a.name)}">${esc(a.address||'')}</option>`).join('');
+  return`<div class="lbl"><span class="warn">⚠ „${esc(s.name)}” nincs meg a táblázatban – melyik lakás ez?</span></div>
+  <input list="dl-${s.id}" data-link="${s.id}" placeholder="Kezdd gépelni (pl. DOH)…"><datalist id="dl-${s.id}">${opts}</datalist>
+  <div class="mut small" style="margin-top:4px">A választást megjegyzi, legközelebb magától felismeri. Vagy add meg lent kézzel az adatokat.</div>`;
+}
 function depotCard(s){
   const open=ui.open===s.id,done=s.status==='done',end=s.kind==='end';
   let h=`<div class="card depot ${done?'done':''}">
   <div class="plan"><span>🕐 ${done?'Teljesítve':'Tervezett érkezés'}: <b>${done?fmtT(s.doneAt):(s.eta?fmtT(s.eta):'–')}</b></span><span>${end?'Végállomás':'Újratöltés'}</span></div>
   <div class="head" data-act="toggle" data-id="${s.id}"><div class="grow"><b class="nm">🏭 ${end?'Vissza a mosodába':'Újratöltés a mosodában'}</b>
-  <div class="small">${esc(cfg.depotAddr)}</div>
+  <div class="small">${esc(cfg.depotAddr)}</div>${done?'':depotCodes()}
   <div class="small mut">${end?'Szennyes leadása':'Szennyes leadása, tiszta felvétele'}</div>${done?`<div class="log">${logLine(s)}</div>`:''}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
   if(!done)h+=actRow(s,null);
   if(open){
@@ -614,30 +733,24 @@ function stopCard(s){
   const a=getApt(s),key=aptKey(s),open=ui.open===s.id,done=s.status==='done';
   const viber='viber://forward?text='+encodeURIComponent(cfg.template.replace('{név}',s.name));
   const cl=s.cleaner==='done'?'✅':s.cleaner==='strip'?'🧺':'';
-  const fa=`data-key="${esc(key)}" data-name="${esc(s.name)}"`;
+  const fa=`data-key="${esc(key)}" data-name="${esc(a?a.name:s.name)}"`;
   const recent=a&&a.codeChanged&&Date.now()-a.codeChanged<14*864e5;
+  const mapped=a&&norm(a.name)!==norm(s.name)?` <span class="mut small">→ ${esc(a.name)}</span>`:'';
   let h=`<div class="card stop ${done?'done':''}">
   <div class="plan"><span>🕐 ${done?'Teljesítve':'Tervezett érkezés'}: <b>${done?fmtT(s.doneAt):(s.eta?fmtT(s.eta):'–')}</b></span><span>📦 <b>${s.packs||1}</b> csomag ${cl}</span></div>
-  <div class="head" data-act="toggle" data-id="${s.id}"><div class="grow"><b class="nm">${a&&a.address?'':'<span class="warn">⚠</span> '}${esc(s.name)}</b>${recent?' <span class="bdg">🔄 új kód</span>':''}${a&&a.note?' 📝':''}
-  <div class="small">${a&&a.address?esc(a.address):'<span class="warn">nincs cím az adatbázisban</span>'}</div>
+  <div class="head" data-act="toggle" data-id="${s.id}"><div class="grow"><b class="nm">${a&&a.address?'':'<span class="warn">⚠</span> '}${esc(s.name)}</b>${mapped}${recent?' <span class="bdg">🔄 új kód</span>':''}${a&&a.old?' <span class="old">régi</span>':''}${a&&a.note?' 📝':''}
+  <div class="small">${a?(a.address?esc(a.address):'<span class="warn">nincs cím a táblázatban</span>'):'<span class="warn">nincs meg a táblázatban – koppints rá</span>'}</div>
   ${a&&a.door?`<div class="small mut">Ajtó: ${esc(a.door)}</div>`:''}
-  ${done?`<div class="log">${logLine(s)}</div>`:''}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
+  ${done?`<div class="log">${logLine(s)}</div>`:codesLine(a)}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
   if(!done)h+=actRow(s,a);
   else h+=`<div class="acts"><div class="row" style="margin-top:0"><a class="btn flex1" href="${viber}">💬 Viber</a></div></div>`;
   if(open){
     h+='<div class="body">';
-    if(recent)h+=`<div class="lbl">Kód változás</div><div class="small">Régi kód: <s>${esc(a.prevCode)}</s></div>`;
-    if(a&&a.code)h+=`<div class="lbl">Belépő kód</div><div class="code">${esc(a.code)}</div>`;
-    if(a&&a.door)h+=`<div class="lbl">Ajtószám / emelet</div><div>${esc(a.door)}</div>`;
-    if(a&&a.help)h+=`<div class="lbl">Bejutási segédlet</div><div class="pre">${esc(a.help)}</div>`;
-    if(!a||!a.address||ui.edit===s.id){
-      h+=`<div class="lbl">Cím</div><input data-f="address" ${fa} value="${esc(a?.address||'')}" placeholder="pl. Dohány utca 12">
-      <div class="lbl">Ajtószám / emelet</div><input data-f="door" ${fa} value="${esc(a?.door||'')}">
-      <div class="lbl">Kód</div><input data-f="code" ${fa} value="${esc(a?.code||'')}">
-      <div class="lbl">Segédlet</div><textarea data-f="help" ${fa}>${esc(a?.help||'')}</textarea>`;
-    }
-    h+=`<div class="lbl">Csomag</div><div class="stepper"><button data-act="packs" data-id="${s.id}" data-d="-1">−</button><b>${s.packs||1}</b><button data-act="packs" data-id="${s.id}" data-d="1">+</button>
-      ${s.arrivedAt?`<span class="tag">📍 ${fmtT(s.arrivedAt)}</span>`:`<button data-act="arrive" data-id="${s.id}">📍 Megérkeztem</button>`}</div>
+    if(!a)h+=linkPicker(s);
+    else if(cfg.alias[norm(s.name)])h+=`<div class="row"><button data-act="unlink" data-id="${s.id}">🔗 Összerendelés törlése (${esc(a.name)})</button></div>`;
+    h+=aptDetail(a);
+    if(!a||!a.address||ui.edit===s.id)h+=editFields(a,fa);
+    h+=`<div class="lbl">Csomag</div><div class="stepper"><button data-act="packs" data-id="${s.id}" data-d="-1">−</button><b>${s.packs||1}</b><button data-act="packs" data-id="${s.id}" data-d="1">+</button></div>
     <div class="lbl">Takarító</div>
     <div class="row" style="margin-top:0"><button class="flex1 ${s.cleaner==='done'?'on':''}" data-act="cleaner" data-id="${s.id}" data-v="done">✅ Végzett</button>
     <button class="flex1 ${s.cleaner==='strip'?'on':''}" data-act="cleaner" data-id="${s.id}" data-v="strip">🧺 Lehúzom</button></div>
@@ -686,28 +799,26 @@ function viewToday(){
 }
 function aptListHtml(){
   const q=norm(ui.q);
-  const list=Object.entries(apts).filter(([k])=>!q||k.includes(q)).sort((a,b)=>a[1].name.localeCompare(b[1].name,'hu'));
-  if(!list.length)return'<div class="mut pad">Még nincs lakás. Töltsd be az Excelt vagy adj hozzá egyet.</div>';
+  const list=Object.entries(apts).filter(([k,a])=>!q||k.includes(q)||(a.aliases||[]).some(x=>x.includes(q))||norm(a.address).includes(q))
+    .sort((a,b)=>(a[1].old-b[1].old)||a[1].name.localeCompare(b[1].name,'hu'));
+  if(!list.length)return'<div class="mut pad">Nincs találat. Töltsd be az Excelt vagy adj hozzá egy lakást.</div>';
   return list.map(([k,a])=>{
     const open=ui.aptOpen===k,fa=`data-key="${esc(k)}" data-name="${esc(a.name)}"`;
     const recent=a.codeChanged&&Date.now()-a.codeChanged<14*864e5;
-    return`<div class="card"><div class="head" style="padding-top:10px" data-act="aptOpen" data-key="${esc(k)}"><div class="grow"><b>${esc(a.name)}</b>${recent?' <span class="bdg">🔄 új kód</span>':''}
-      <div class="mut small">${a.address?esc(a.address):'⚠ nincs cím'}${a.door?' · '+esc(a.door):''}</div></div><span class="mut">${open?'▲':'▼'}</span></div>
-      ${open?`<div class="body"><div class="lbl">Cím</div><input data-f="address" ${fa} value="${esc(a.address)}">
-      <div class="lbl">Ajtószám / emelet</div><input data-f="door" ${fa} value="${esc(a.door||'')}">
-      <div class="lbl">Kód</div><input data-f="code" ${fa} value="${esc(a.code)}">
-      <div class="lbl">Segédlet</div><textarea data-f="help" ${fa}>${esc(a.help)}</textarea>
+    return`<div class="card"><div class="head" style="padding-top:10px" data-act="aptOpen" data-key="${esc(k)}"><div class="grow"><b>${esc(a.name)}</b>${recent?' <span class="bdg">🔄 új kód</span>':''}${a.old?' <span class="old">régi</span>':''}
+      <div class="mut small">${a.address?esc(a.address):'⚠ nincs cím'}</div>${codesLine(a)}</div><span class="mut">${open?'▲':'▼'}</span></div>
+      ${open?`<div class="body">${aptDetail(a)}${editFields(a,fa)}
       <div class="lbl">Megjegyzés</div><textarea data-f="note" ${fa}>${esc(a.note||'')}</textarea>
       <div class="row"><button class="bad" data-act="aptDel" data-key="${esc(k)}">✕ Lakás törlése</button></div></div>`:''}</div>`}).join('');
 }
 function viewApts(){
-  const n=Object.keys(apts).length,miss=Object.values(apts).filter(a=>!a.address).length,ds=dataStatus();
-  return`<h2>Lakások <span class="mut small">${n} db${miss?` · ${miss} cím nélkül`:''}</span></h2>
+  const all=Object.values(apts),n=all.filter(a=>!a.old).length,nOld=all.length-n,miss=all.filter(a=>!a.address&&!a.old).length,ds=dataStatus();
+  return`<h2>Lakások <span class="mut small">${n} db${nOld?` + ${nOld} régi`:''}${miss?` · ${miss} cím nélkül`:''}</span></h2>
   <div class="card pad"><div class="lbl" style="margin-top:0">Adatbázis: ${ds.ok?'✅':'⚠'} ${esc(ds.txt)}</div>
   ${cfg.dataUrl?'<div class="row" style="margin-top:6px"><button class="pri flex1" data-act="syncNow">🔄 Frissítés a linkről</button></div>':'<div class="mut small">Automatikus napi frissítéshez add meg az adatbázis linkjét a Beállításokban.</div>'}
   <div class="lbl">Excel / CSV betöltése</div>
   <input type="file" id="xl" accept=".xlsx,.xls,.csv,.ods">
-  <div class="mut small" style="margin-top:6px">Az oszlopokat a fejléc alapján ismeri fel (név, cím, ajtó, kód, segédlet). Betöltéskor a cím/kód/segédlet frissül, a megjegyzéseid megmaradnak. Ha egy kód megváltozik, jelzi.</div></div>
+  <div class="mut small" style="margin-top:6px">A „Lakás infók” táblázatot (mindkét lapját) a fejléc alapján olvassa: kapukód, kulcsőr, pótkulcsőr, takarítós kulcs helye, cím, segédlet-link, wifi. Betöltéskor minden frissül, a megjegyzéseid és a kézzel beírt adataid megmaradnak. Ha egy kód megváltozik, jelzi.</div></div>
   <div class="row" style="margin:0 0 10px"><input id="q" placeholder="Keresés…" value="${esc(ui.q)}" style="margin:0;flex:1"><button data-act="aptNew">+ Új</button></div>
   <div id="aptlist">${aptListHtml()}</div>`;
 }
@@ -816,6 +927,7 @@ document.addEventListener('click',e=>{
   if(act==='done'&&stop){markDone(stop.id);return}
   if(act==='doneViber'&&stop){markDone(stop.id);location.href='viber://forward?text='+encodeURIComponent(cfg.template.replace('{név}',stop.name));return}
   if(act==='csv'){exportCSV();return}
+  if(act==='unlink'&&stop){delete cfg.alias[norm(stop.name)];save();render();replan();return}
   if(act==='undo'&&stop){stop.status='pending';delete stop.doneAt;delete stop.legKm;delete stop.approx;delete stop.round;save();render();replan();return}
   if(act==='edit'&&stop){ui.edit=ui.edit===stop.id?null:stop.id;render();return}
   if(act==='del'&&stop){
@@ -853,8 +965,16 @@ document.addEventListener('change',async e=>{
     const k=t.dataset.key;
     if(!apts[k])apts[k]={name:t.dataset.name||k,address:'',code:'',door:'',help:'',note:''};
     apts[k][t.dataset.f]=t.value.trim();
+    if(t.dataset.f!=='note'){apts[k].manual=apts[k].manual||{};apts[k].manual[t.dataset.f]=true}
     if(t.dataset.f==='address'){delete apts[k].lat;delete apts[k].lon;delete apts[k].geoAddr}
     save();return;
+  }
+  if(t.dataset.link){
+    const s=today&&today.stops.find(x=>x.id===t.dataset.link);const v=t.value.trim();
+    const hit=Object.entries(apts).find(([,a])=>a.name===v)||Object.entries(apts).find(([,a])=>norm(a.name)===norm(v));
+    if(s&&hit){cfg.alias[norm(s.name)]=hit[0];save();render();toast(`${s.name} → ${hit[1].name} · nyomd meg az „Útvonal újratervezése” gombot`);replan()}
+    else if(v)toast('Nincs ilyen nevű lakás a táblázatban');
+    return;
   }
   if(t.dataset.vnote){const s=today&&today.stops.find(x=>x.id===t.dataset.vnote);if(s){s.vnote=t.value.trim();save()}return}
   if(t.dataset.cfg){const k=t.dataset.cfg;cfg[k]=t.dataset.num?(Number(t.value)||0):t.value.trim();save();return}
