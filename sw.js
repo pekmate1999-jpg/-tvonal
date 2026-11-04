@@ -1,6 +1,6 @@
 // Ágynemű futár – service worker (telepíthetőség, offline indulás, megosztás fogadása)
 // Az oldal mindig a hálózatról jön, ha van net (így a frissítések azonnal megérkeznek); offline a mentett példány indul.
-const V='futar-1.11.2';
+const V='futar-1.12.0';
 const SHARE='futar-share';
 const SHELL=['./','./manifest.webmanifest','./icon-192.png','./icon-512.png','./icon-maskable-512.png'];
 const LIB='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
