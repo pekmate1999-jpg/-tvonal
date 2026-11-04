@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.11.0">
+<meta name="app-version" content="1.11.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -594,6 +594,7 @@ function newDay(names,date,append,urgent){
   if(append&&today){
     const have=new Set(today.stops.filter(s=>s.type!=='depot').flatMap(s=>(s.members||[s.name]).map(norm)));
     const fresh=stops.filter(s=>!have.has(norm(s.name)));
+    const batch=uid();fresh.forEach(s=>s.batch=batch);if(fresh.length)today.lastBatch=batch;
     const ei=today.stops.findIndex(s=>s.type==='depot'&&s.kind==='end'&&s.status!=='done');
     today.stops.splice(ei<0?today.stops.length:ei,0,...fresh);
   }else{
@@ -972,7 +973,9 @@ function topBar(){
 function pasteBox(has){
   return`<div class="card pad"><div class="lbl" style="margin-top:0">Reggeli üzenet beillesztése</div>
   <textarea id="paste" placeholder="2026.11.02.&#10;@Mate&#10;DOHÁNY-2 🥀&#10;HOLLÓ 🪶">${esc(ui.paste)}</textarea>
-  <div class="row"><button class="pri flex1" data-act="load" data-mode="new">Új nap</button>${has?'<button class="flex1" data-act="load" data-mode="add">+ Hozzáadás a mához</button>':''}</div></div>`;
+  <div class="row"><button class="pri flex1" data-act="load" data-mode="new">Új nap</button>${has?'<button class="flex1" data-act="load" data-mode="add">+ Hozzáadás a mához</button>':''}</div></div>`+(has&&today?(()=>{
+    const lb=today.lastBatch?today.stops.filter(s=>s.batch===today.lastBatch&&s.status!=='done'):[];
+    return`<div class="card pad"><div class="lbl" style="margin-top:0">Lista kezelése</div><div class="row" style="margin-top:4px">${lb.length?`<button class="flex1" data-act="undoBatch">↩ Utolsó hozzáadás visszavonása (${lb.length} lakás: ${esc(lb.slice(0,3).map(s=>s.name).join(', '))}${lb.length>3?'…':''})</button>`:''}<button class="bad flex1" data-act="discardDay">🗑 Mai lista törlése</button></div></div>`})():'');
 }
 function actRow(s,a){
   const depot=s.type==='depot',end=s.kind==='end';
@@ -1565,6 +1568,16 @@ document.addEventListener('click',e=>{
   if(act==='meterSkip'){ui.modal=null;render();return}
   if(act==='homeSkip'){const x=dayByDate(d.date);if(x){x.homeSkip=true;save();render()}return}
   if(act==='csvDay'){exportDayCSV();return}
+  if(act==='undoBatch'&&today){
+    const b=today.lastBatch,n=today.stops.filter(s=>s.batch===b&&s.status!=='done').length;
+    if(!b||!n||!confirm(`Kiveszem az utoljára hozzáadott ${n} lakást a mai listából?`))return;
+    today.stops=today.stops.filter(s=>!(s.batch===b&&s.status!=='done'));delete today.lastBatch;ensureEnd();save();render();replan();toast('↩ '+n+' lakás kivéve');return;
+  }
+  if(act==='discardDay'&&today){
+    const dn=today.stops.filter(s=>s.status==='done'&&s.type!=='depot').length,n=today.stops.filter(s=>s.type!=='depot').length;
+    if(!confirm(`Törlöd a mai listát (${n} lakás)?${dn?`\n\n⚠ Már ${dn} lakást készre jelöltél – ezek naplója is törlődik! Ha a saját munkanapod, inkább a „Munka vége” gombot használd.`:''}`))return;
+    keysHeld=keysHeld.filter(k=>!today.stops.some(s=>s.id===k.id));today=null;ui.open=null;save();render();toast('🗑 Mai lista törölve');return;
+  }
   if(act==='keyKept'){finishModal('kept');return}
   if(act==='keyCancel'){ui.modal=null;render();return}
   if(act==='keyRet'){returnKey(d.id);return}
