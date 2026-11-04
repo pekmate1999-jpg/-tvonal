@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.11.1">
+<meta name="app-version" content="1.11.2">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1095,6 +1095,18 @@ function stopCard(s){
   return h+'</div>';
 }
 let sameSet={},groupLead={};
+// megálló = egy cím: az egymás után következő, ugyanazon a címen lévő lakások (pl. TÖK-1 + TÖK-2) egynek számítanak
+function remainingStops(){
+  if(!today)return 0;
+  const p=today.stops.filter(s=>s.status!=='done');let n=0,prev=null;
+  for(const s of p){
+    if(s.type==='depot'){prev=null;continue}
+    const k=addrKeyOf(s);
+    if(!(prev&&k&&prev===k))n++;
+    prev=k||null;
+  }
+  return n;
+}
 function viewToday(){
   let h=topBar();
   const homeBtn=cfg.meterAsk!=='0'&&!(today&&(today.startedAt||(today.meter&&today.meter.home0)))&&!(!today&&LS.get('meterPending',null)&&Date.now()-LS.get('meterPending',{}).at<16*3.6e6)?`<div class="row" style="margin:0 0 10px"><button class="flex1" data-act="meterOpen" data-which="home0" data-date="${today?esc(today.date):''}">🏠 Indulok otthonról – ⛽ óraállás</button></div>`:'';
@@ -1109,8 +1121,8 @@ function viewToday(){
   ${T('Hátralévő idő',today.endEta?hm(today.endEta-Date.now()):'–','rem')}
   ${T('Raktárba érkezés',today.endEta?fmtT(today.endEta):'–')}
   ${T('Következő lakásra'+(today.planSrc==='traffic'?' 🚦':''),nxt&&nxt.planMin!=null?Math.round(nxt.planPred??nxt.planMin)+' p':'–')}
-  ${T('Fennmaradó lakások',apt.filter(s=>s.status!=='done').length)}
-  ${T('Körök',dep.length?Math.min(dep.length,dep.filter(s=>s.status==='done').length+1)+'/'+dep.length:'–')}
+  ${T('Fennmaradó lakások',apt.filter(s=>s.status!=='done').reduce((n,s)=>n+(s.members?s.members.length:1),0))}
+  ${T('Fennmaradó megállók',remainingStops())}
   ${T('Megtett út',st.km?(st.approx?'~':'')+fmtKm(st.km):'–')}
   ${T('Eltelt idő',today.startedAt?hm(st.ms):'–','clock')}
   </div>`;
