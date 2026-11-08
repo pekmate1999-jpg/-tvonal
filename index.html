@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.18.1">
+<meta name="app-version" content="1.18.2">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -432,7 +432,7 @@ function hfFromPlan(){
 async function legKm(from,to){const L=await legsOf([from,to],{noTraffic:true});return{km:L[0].km,approx:L[0].approx}}
 /* Határidők + időpontok: 1) semmi ne késsen (késés-perc ×1000), 2) sürgősek minél előbb (×10), 3) lejárt határidejűek minél előbb (×0,1),
    azon belül a legrövidebb nap. ≤14 megállóig dinamikus programozás (Pareto-front), fölötte többszörös helyi keresés. */
-function timeOrder(d,src,sIdx,ok,off,HF){
+function timeOrder(d,src,sIdx,ok,off,HF,CAP){
   const n=ok.length,now=planNow();
   const hf=HF?(t=>HF(now+t*6e4)):src!=='traffic'?(t=>learnH(now+t*6e4)):(()=>1);
   const S=ok.map(s=>({af:afterOf(s)!=null?(afterOf(s)-now)/6e4:null,svc:svcMs(s)/6e4,dl:s.dl&&s.dl.at?(s.dl.at-now)/6e4:null,arrive:!!(s.dl&&s.dl.type==='arrive'),ap:s.appt?(s.appt.start-now)/6e4:null,urg:!!s.urgent,s}));
@@ -446,11 +446,14 @@ function timeOrder(d,src,sIdx,ok,off,HF){
     if(x.urg)pen+=Math.max(0,arr)*10; // sürgős: a határidők után a legfontosabb
     return[fin,pen];
   };
-  const evalO=o=>{let t=0,pen=0,i=sIdx;for(const k of o){[t,pen]=step(t,pen,i,k);i=k+off}return{p:pen,t:t+back(i,t)}};
+  // kapacitás: ha a következő lakás már nem fér az autóba, előbb vissza a raktárba újratölteni (ugyanaz a szabály, mint a körökre bontásnál)
+  const cap=CAP&&CAP.cap>0?CAP.cap:0,load0=CAP?CAP.load0||0:0,pk=k=>ok[k].packs||1,RL={type:'depot',kind:'reload'},rlSvc=cap?svcMs(RL)/6e4:0;
+  const toDep=(i,t)=>predDrive(d[i][0]/60*hf(t),src,RL,false);
+  const evalO=o=>{let t=0,pen=0,i=sIdx,ld=load0;for(const k of o){if(cap&&ld>0&&ld+pk(k)>cap){t+=toDep(i,t)+rlSvc;i=0;ld=0}[t,pen]=step(t,pen,i,k);ld+=pk(k);i=k+off}return{p:pen,t:t+back(i,t)}};
   const better=(a,b)=>a.p<b.p-1e-6||(Math.abs(a.p-b.p)<=1e-6&&a.t<b.t-1e-6);
   let best=null,bo=null;
   const consider=o=>{const v=evalO(o);if(!best||better(v,best)){best=v;bo=o.slice()}};
-  if(n<=14&&n>0){
+  if(n<=14&&n>0&&!cap){
     const F=1<<n,front=new Array(F*n);
     const ins=(idx,x)=>{let a=front[idx]||[];if(a.some(y=>y.p<=x.p+1e-9&&y.t<=x.t+1e-9))return;a=a.filter(y=>!(x.p<=y.p+1e-9&&x.t<=y.t+1e-9));a.push(x);if(a.length>4){a.sort((u,v)=>(u.p-v.p)||(u.t-v.t));a.length=4}front[idx]=a};
     for(let k=0;k<n;k++){const[t,p]=step(0,0,sIdx,k);ins((1<<k)*n+k,{p,t,pj:-1,pi:-1})}
@@ -646,6 +649,10 @@ async function optimize(){
     if(!reloads&&!(cfg.cap>0&&totalPacks>cfg.cap)){
       const r=timeOrder(d,src,sIdx,ok,off);rounds=[r.order];   // határidők, időpontok, sürgősek figyelembevételével
       TO={d,src,sIdx,ok,off,order:r.order};
+    }else if(cfg.cap>0){
+      // több kör: a határidők az újratöltéssel együtt számítanak (régen itt csak a legrövidebb utat nézte)
+      const CAP={cap:cfg.cap,load0:cur?used:0},r=timeOrder(d,src,sIdx,ok,off,null,CAP);
+      rounds=splitRounds(r.order,CAP.load0,cfg.cap,1);TO={d,src,sIdx,ok,off,order:r.order,CAP};
     }else{
       const list=ordered(sIdx,ok.map((_,k)=>k+off)).map(x=>ok[x-off]);
       const chunks=splitRounds(list,cur?used:0,cfg.cap,reloads+1);
@@ -663,8 +670,8 @@ async function optimize(){
   await replan();
   // jövőbeli forgalom: ha a nap későbbi szakaszai lassabbak/gyorsabbak, a sorrendet ezzel újraszámolja
   if(TO&&today&&TO.src==='traffic'){const HF=hfFromPlan();
-    if(HF){toast('Sorrend újraszámolása a várható forgalommal…',1);const r=timeOrder(TO.d,TO.src,TO.sIdx,TO.ok,TO.off,HF);
-      if(r.order.some((s,i)=>s!==TO.order[i])){build([r.order]);await replan()}}}
+    if(HF){toast('Sorrend újraszámolása a várható forgalommal…',1);const r=timeOrder(TO.d,TO.src,TO.sIdx,TO.ok,TO.off,HF,TO.CAP);
+      if(r.order.some((s,i)=>s!==TO.order[i])){build(TO.CAP?splitRounds(r.order,TO.CAP.load0,cfg.cap,1):[r.order]);await replan()}}}
   const nR=today.stops.filter(s=>s.type==='depot').length;
   const mins=today.endEta?Math.round((today.endEta-Date.now())/60000):null;
   toast(`Kész · ${nR} kör${today.remKm?` · ~${Math.round(today.remKm)} km`:''}${mins!=null?` · ~${mins} perc`:''}${today.optSrc==='traffic'?(today.timedN?' · 🚦 élő + várható forgalommal':' · 🚦 élő forgalommal'):useTraffic()?' · ⚠ forgalmi adat nem jött ('+trafficErr+'), forgalom nélkül':today.planApprox?' (becslés)':''}${bad.length?` · ⚠ ${bad.length} lakásnak nincs/nem található címe`:''}`);
