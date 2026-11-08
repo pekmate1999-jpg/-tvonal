@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.21.0">
+<meta name="app-version" content="1.21.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1227,7 +1227,7 @@ function actRow(s,a){
   const arr=s.arrivedAt?`<span class="tag" style="align-self:center">🅿 ${fmtT(s.arrivedAt)}</span>`:`<button class="flex1" data-act="arrive" data-id="${s.id}">${s.type==='depot'?'🅿 Megérkeztem':'🅿 Leparkoltam'}</button>`;
   return`<div class="acts"><div class="row" style="margin-top:0"><a class="btn navbtn ${url?'':'dis'}" ${url?`href="${esc(url)}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>Navigálás</a>${arr}</div>
   <div class="row">${depot?`<button class="okb flex1" data-act="done" data-id="${s.id}">✔ ${end?'Leadtam':'Újratöltöttem'}</button>`:`<button class="okb flex1" data-act="doneViber" data-id="${s.id}">✔ Kész + 💬 Üzenet</button>`}</div>
-  ${depot?'':`<div class="row"><button class="flex1 sm" data-act="later" data-id="${s.id}">↩ Később jövök</button><button class="flex1 sm ${s.viaDepot?'on':''}" data-act="viaDepot" data-id="${s.id}">${s.viaDepot?'✕ Megvan a tiszta':'🧺 Mosás nincs kész'}</button></div>`}</div>`;
+  ${depot?'':`<div class="row"><button class="flex1 sm" data-act="later" data-id="${s.id}">↩ Később jövök</button>${!today.startedAt||s.viaDepot?`<button class="flex1 sm ${s.viaDepot?'on':''}" data-act="viaDepot" data-id="${s.id}">${s.viaDepot?'✕ Megvan a tiszta':'🧺 Mosás nincs kész'}</button>`:''}</div>`}</div>`;
 }
 function codesLine(a){
   if(!a)return'';
@@ -1775,14 +1775,15 @@ function loadModal(){
   const inN=items.filter(s=>s.loaded).reduce((n,s)=>n+(s.packs||1),0),allN=items.reduce((n,s)=>n+(s.packs||1),0);
   const notReady=pend.filter(s=>s.viaDepot);
   const row=(s,k)=>{const a=getApt(s);return`<div class="row" style="margin-top:4px;align-items:center">
-    <button class="flex1 ${s.loaded?'on':''}" data-act="loadTog" data-id="${s.id}" style="text-align:left;justify-content:flex-start">${s.loaded?'✅':'⬜'} <b>${k+1}.</b>&nbsp;${esc(s.name)} · ${s.packs||1} táska${s.members?` <span class="mut small">(${s.members.length} lakás)</span>`:''}</button>
+    <button class="flex1 sm ${s.loaded?'on':''}" data-act="loadTog" data-id="${s.id}" style="text-align:left;justify-content:flex-start;padding:10px 8px!important">${s.loaded?'✅':'⬜'} <b>${k+1}.</b>&nbsp;${esc(s.name)}${s.members?` <span class="mut small">(${s.members.length})</span>`:''}</button>
+    <button class="sm" data-act="packs" data-id="${s.id}" data-d="-1" style="padding:10px 10px!important">−</button><b style="min-width:22px;text-align:center">${s.packs||1}</b><button class="sm" data-act="packs" data-id="${s.id}" data-d="1" style="padding:10px 10px!important">+</button>
     ${L.pickup?'':`<button data-act="loadNR" data-id="${s.id}" title="A mosás még nincs kész">⏳</button>`}</div>`};
   return`<div class="ov"><div class="modal">
     <div class="mt">🧺 Bepakolás${L.pickup?' – mosodai felvétel':''}</div>
     ${L.pickup?'':`<div class="small">Ma még <b>${tot} táska</b> · ${pend.length} megálló → <b>${nR} kör</b></div>
     <div class="row" style="margin-top:0;align-items:center"><span class="flex1 small">Ennyi táska fér az autóba:</span><input data-loadcap="1" inputmode="numeric" value="${cap||''}" placeholder="nincs korlát" style="width:110px;margin:0"></div>`}
     ${notReady.length&&!L.pickup?`<div class="small">🏭 Nincs kész a mosás, később hozod: ${notReady.map(s=>`<b>${esc(s.name)}</b>${s.viaDepot.ready?' ('+fmtT(s.viaDepot.ready)+')':''} <a href="#" data-act="loadNR" data-id="${s.id}">✕</a>`).join(', ')}</div>`:''}
-    <div class="lbl">Pakolás sorrendje <span class="mut" style="text-transform:none">– az 1. kerüljön leghátra (azt viszed utoljára)</span></div>
+    <div class="lbl">Pakolás sorrendje <span class="mut" style="text-transform:none">– az 1. kerüljön leghátra · a szám = táska</span></div>
     ${load.length?load.map(row).join(''):'<div class="small mut">Ebben a körben nincs mit bepakolni.</div>'}
     <div class="small" style="margin-top:6px">${inN===allN&&allN?'✅':'📦'} Bent: <b>${inN}/${allN}</b> táska${!L.pickup&&nR>1?' · a többi a következő körben':''}</div>
     <div class="small mut">⏳ = ennél a lakásnál nincs kész a mosás → később visszajössz érte, a terv ehhez igazodik. Ha egy lakásba csak később lehet menni: nyisd le a kártyáját → ⏰ Határidő → „⏳ Legkorábban mehetsz”.</div>
@@ -2119,7 +2120,7 @@ document.addEventListener('click',e=>{
       cfg.parks=cfg.parks||{};const k=pkKey(addr);cfg.parks[k]={...(cfg.parks[k]||{}),manual:{lat:+p.lat.toFixed(6),lon:+p.lon.toFixed(6),at:Date.now()}};save();render();replan();toast('🅿 Parkolóhely mentve')});return}
   if(act==='parkDel'){const k=pkKey(d.addr);if(cfg.parks&&cfg.parks[k]&&confirm('Törlöd a mentett parkolóhelyet? Utána újra a címre navigál, és a következő parkolásaidból tanul.')){delete cfg.parks[k];save();render();replan()}return}
   if(act==='cleaner'&&stop){stop.cleaner=stop.cleaner===d.v?null:d.v;stop.cleanerAt=stop.cleaner?Date.now():null;save();render();replan();return}
-  if(act==='packs'&&stop){stop.packs=Math.max(1,(stop.packs||1)+(+d.d));save();render();return}
+  if(act==='packs'&&stop){stop.packs=Math.max(1,(stop.packs||1)+(+d.d));save();render();if(cfg.cap>0){clearTimeout(ui.packT);ui.packT=setTimeout(()=>optimize(),1500)}return}
   if(act==='done'&&stop){askDone(stop,false);return}
   if(act==='doneViber'&&stop){askDone(stop,true);return}
   if(act==='keyBack'){finishModal('back');return}
