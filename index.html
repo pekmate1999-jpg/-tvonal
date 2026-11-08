@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.12.0">
+<meta name="app-version" content="1.15.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -94,6 +94,11 @@ h2{font-size:18px;margin:6px 2px 10px}
 .pin.wide{border-radius:14px;padding:0 6px;width:auto;min-width:28px}
 .leaflet-popup-content{font:14px/1.4 system-ui,sans-serif;margin:10px 12px}.leaflet-popup-content .btn,.leaflet-popup-content button{padding:7px 10px;font-size:13px;margin-top:6px}
 .legend{font-size:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:8px}.legend i{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-2px;margin-right:4px}
+.dlb{font-size:12px;border-radius:8px;padding:1px 7px;font-weight:800;background:color-mix(in srgb,var(--ac) 14%,var(--card));color:var(--tx)}
+.dlb.late{background:var(--bad);color:#fff}.dlb.free{background:color-mix(in srgb,var(--ok) 16%,var(--card));color:var(--ok)}.dlb.appt{background:#8b5cf6;color:#fff}
+.dlrow{padding:2px 12px 0;display:flex;gap:6px;flex-wrap:wrap}
+.prev{white-space:pre-wrap;font-size:13px;background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;max-height:150px;overflow:auto}
+.modal{max-height:92vh;overflow:auto}
 </style>
 </head>
 <body>
@@ -112,7 +117,7 @@ h2{font-size:18px;margin:6px 2px 10px}
 const $=s=>document.querySelector(s);
 const LS={get(k,d){try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
 let apts=LS.get('apts',{}), today=LS.get('today',null), days=LS.get('days',[]), keysHeld=LS.get('keysHeld',[]);
-const DEF={template:'{név} Kész',city:'Budapest',depotAddr:'Bajcsy-Zsilinszky út 35, Budapest',cap:0,stopMin:8,stripMin:12,reloadMin:15,dataUrl:'',deadline:'15:00'};
+const DEF={template:'{név} kész',msgStyle:'short',city:'Budapest',depotAddr:'Bajcsy-Zsilinszky út 35, Budapest',cap:0,stopMin:8,stripMin:12,reloadMin:15,dataUrl:'',deadline:'15:00'};
 let cfg=Object.assign({},DEF,LS.get('cfg',{}));
 if(!cfg.alias||typeof cfg.alias!=='object')cfg.alias={};
 if(!cfg.mergeAddr||typeof cfg.mergeAddr!=='object')cfg.mergeAddr={};
@@ -120,7 +125,7 @@ let ui={tab:'today',open:null,edit:null,aptOpen:null,histOpen:null,q:'',paste:''
 let matchCache=new Map();
 const save=()=>{matchCache.clear();LS.set('keysHeld',keysHeld);LS.set('apts',apts);LS.set('today',today);LS.set('days',days);LS.set('cfg',cfg)};
 const APP_VERSION=(document.querySelector('meta[name=app-version]')||{}).content||'?';
-const SCHEMA=3; // növeld, ha az adatformátum megváltozik, és írj hozzá átalakítót a migrate()-be
+const SCHEMA=5; // növeld, ha az adatformátum megváltozik, és írj hozzá átalakítót a migrate()-be
 try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>Math.random().toString(36).slice(2,9);
@@ -150,22 +155,53 @@ function migrate(){
   if(from>=SCHEMA)return;
   try{localStorage.setItem('backup_before_schema_'+SCHEMA,JSON.stringify({apts,today,days,cfg,at:Date.now()}))}catch(e){}
   if(from<2)ensureEnd();
+  if(from<5&&cfg.template==='{név} Kész')cfg.template='{név} kész'; // v1.15: a csoport stílusa
+  if(from<4&&!apts.BARLAI)apts.BARLAI={name:'Barlai',address:'Budapest II. kerület, Fillér utca 26',apptMin:60,note:'',manual:{address:true},aliases:[]}; // v1.13: időpontos program
   if(from<3){for(const t of [...days,...(today?[today]:[])])for(const s of t.stops)if(s.type!=='depot'&&!s.cleaner)s.cleaner='done'} // v1.10: a takarító alapból végzett // v1.2: a mai listához végállomás (raktár)
   LS.set('schema',SCHEMA);save();
 }
 
 /* ===== üzenet feldolgozása ===== */
+// a név utáni rész: „Nincs foglalás” | „15:00” | „17:00-18:00” | „13:00-ig érj ide!”
+function parseInfo(s){
+  s=String(s||'').trim();
+  if(/nincs\s*fogl|bármikor|barmikor/i.test(s))return{nobook:true,raw:s};
+  // sáv: „17:00-18:00”, „17-18h”, „17h-18h”
+  const r=s.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(?:h|óra)?\s*[-–]\s*(\d{1,2})(?:[:.](\d{2}))?\s*(?:h\b|óra)?/i);
+  if(r&&(r[2]||r[4]||/h|óra/i.test(r[0]))&&+r[1]<24&&+r[3]<24)return{h:+r[1],m:+(r[2]||0),type:'done',label:`${pad2(r[1])}:${r[2]||'00'}–${pad2(r[3])}:${r[4]||'00'}`,raw:s};
+  // egy időpont: „15:00”, „15.00”, „15h”, „15 óra”, „15:” (elírás), „13-ig”
+  const t=s.match(/(\d{1,2})\s*(?:[:.]\s*(\d{2})|h\b|óra|ó\b|:(?!\s*\d)|-?ig\b)/i);
+  if(t&&+t[1]<24){const mm=t[2]||'00',arrive=/[ée]rj|oda|ide\b|[ée]rkez/i.test(s);return{h:+t[1],m:+mm,type:arrive?'arrive':'done',label:`${pad2(t[1])}:${mm}${arrive?'-ig érj oda':''}`,raw:s}}
+  return s?{raw:s}:null;
+}
 function parseMsg(t){
-  let date=null;const names=[],urgent=[];
+  let date=null;const names=[],urgent=[],info={};
   for(let line of String(t||'').split(/\r?\n/)){
     line=line.trim();if(!line||line.startsWith('@'))continue;
     const m=line.match(/^(\d{4})\.\s?(\d{2})\.\s?(\d{2})/);
     if(m){date=`${m[1]}-${m[2]}-${m[3]}`;continue}
-    const u=/!|⚡|❗|‼|s[üu]rg[őo]s/i.test(line);
-    const n=line.replace(/s[üu]rg[őo]s/ig,'').replace(/[^\p{L}\p{N}\s.\-]/gu,'').replace(/\s+/g,' ').trim();
-    if(n){names.push(n);if(u)urgent.push(n)}
+    let np=line,ip='';
+    const c=line.match(/^(.+?):\s+(.*)$/);
+    if(c){np=c[1];ip=c[2]}
+    else{const k=line.search(/\d{1,2}[:.]\d{2}|\b\d{1,2}\s*h\b|nincs\s+fogl|[ée]rj\s+ide|bármikor/i);if(k>0){np=line.slice(0,k);ip=line.slice(k)}}
+    const u=/!|⚡|❗|‼|s[üu]rg[őo]s/i.test(np);
+    const n=np.replace(/s[üu]rg[őo]s/ig,'').replace(/[^\p{L}\p{N}\s.\-]/gu,'').replace(/\s+/g,' ').trim();
+    if(!n)continue;
+    names.push(n);if(u)urgent.push(n);
+    const I=parseInfo(ip);if(I)info[norm(n)]=I;
   }
-  return{date,names,urgent};
+  if(date&&Math.abs(Date.parse(date+'T12:00:00')-Date.parse(ld()+'T12:00:00'))>1.5*864e5){info.__datefix=date;date=ld()}
+  return{date,names,urgent,info};
+}
+const hhmm=ms=>{const d=new Date(ms);return pad2(d.getHours())+':'+pad2(d.getMinutes())};
+const atTime=(dateStr,h,m)=>{const d=new Date((dateStr||ld())+'T00:00:00');d.setHours(h,m,0,0);return d.getTime()};
+// határidő egy lakáshoz: üzenetből, különben az alap (Beállítások, 15:00)
+function dlFor(n,info,date){
+  const I=info&&info[norm(n)];
+  if(I&&I.nobook)return{nobook:true,info:I.raw};
+  if(I&&I.h!=null)return{dl:{at:atTime(date,I.h,I.m),type:I.type,label:I.label},info:I.raw};
+  const def=deadlineMs(date||ld());
+  return def?{dl:{at:def,type:'done',label:cfg.deadline,def:true},...(I?{info:I.raw}:{})}:(I?{info:I.raw}:{});
 }
 /* Viber-név → táblázat-név: pontos, kézi összerendelés, segédlet-név (pl. „Holló bejutási infók”),
    majd betű-előtag + azonos sorszám (DOHÁNY-2 → DOH-2, KÁROLY-1 → KAR-1, NYÁRY → NYA) */
@@ -203,6 +239,8 @@ function parseAddr(addr){
   const pcm=s.match(/(?:^|[\s,])(1\d{3})(?=[\s,.]|$)/);
   const pc=pcm&&+pcm[1].slice(1,3)>=1&&+pcm[1].slice(1,3)<=23?pcm[1]:'';
   let t=s;if(pc)t=t.replace(pc,' ');
+  const rk=s.match(/\b([IVX]{1,5})\.\s*ker(?:ület)?\b\.?/i),rkd=!pc&&rk?ROMAN.indexOf(rk[1].toUpperCase()):-1;
+  if(rk)t=t.replace(rk[0],' ');
   t=t.replace(/\bBudapest\b/i,' ').replace(/^[\s,.]+/,'').replace(/\s+/g,' ');
   t=t.replace(/\bu\.(?=[\s,\d]|$)/gi,'utca ').replace(/\bkrt\.?(?=[\s,\d]|$)/gi,'körút ').replace(/\bút\./gi,'út ').replace(/\btér\./gi,'tér ').replace(/\s+/g,' ').trim();
   const re=new RegExp('^(.*?\\b(?:'+STREET+'))\\.?\\s*(\\d+(?:\\s*[-–]\\s*\\d+)?(?:\\s?\\/\\s?[A-Za-z]\\b|[A-Za-z]\\b)?)','i');
@@ -210,7 +248,7 @@ function parseAddr(addr){
   if(m){street=m[1].replace(/[,.\s]+$/,'').trim();num=m[2].replace(/\s+/g,'')}
   else{const m2=t.match(/^([^\d,]+?)[\s,.]*(\d+(?:[-–]\d+)?(?:\/?[A-Za-z]\b)?)/);if(m2){street=m2[1].replace(/[,.\s]+$/,'').trim();num=m2[2]}else street=t.split(',')[0].trim()}
   street=street.charAt(0).toUpperCase()+street.slice(1);
-  const district=pc?String(+pc.slice(1,3)):'';
+  const district=pc?String(+pc.slice(1,3)):rkd>0?String(rkd):'';
   const town=(pc||/budapest/i.test(s))?'Budapest':(cfg.city||'');
   const clean=[street,num].filter(Boolean).join(' ');
   return{pc,district,roman:district?ROMAN[+district]:'',street,num,town,full:(pc?pc+' ':'')+(town?town+', ':'')+clean};
@@ -350,6 +388,50 @@ async function legsOf(wp,opt){ // wp: legalább 2 pont → [{km,min,approx,src}]
   return wp.slice(1).map((p,i)=>{const k=hav(wp[i],p)*1.3;return{km:k,min:k/30*60,approx:true,src:'becslés'}});
 }
 async function legKm(from,to){const L=await legsOf([from,to],{noTraffic:true});return{km:L[0].km,approx:L[0].approx}}
+/* Határidők + időpontok: 1) semmi ne késsen (késés-perc ×1000), 2) sürgősek minél előbb (×10), 3) lejárt határidejűek minél előbb (×0,1),
+   azon belül a legrövidebb nap. ≤14 megállóig dinamikus programozás (Pareto-front), fölötte többszörös helyi keresés. */
+function timeOrder(d,src,sIdx,ok,off){
+  const n=ok.length,now=Date.now();
+  const S=ok.map(s=>({svc:svcMs(s)/6e4,dl:s.dl&&s.dl.at?(s.dl.at-now)/6e4:null,arrive:!!(s.dl&&s.dl.type==='arrive'),ap:s.appt?(s.appt.start-now)/6e4:null,urg:!!s.urgent,s}));
+  S.forEach(x=>{const lim=x.ap??x.dl;x.w=lim!=null&&lim<=0?0.1:1000}); // tartható határidő ≈ kötelező; már lejárt: csak „minél előbb”
+  const tt=(i,k)=>{const p=d[i][k+off]/60;return predDrive(p,src,S[k].s,p<0.75)};
+  const back=i=>predDrive(d[i][0]/60,src,{type:'depot',kind:'end'},false);
+  const step=(t,pen,i,k)=>{
+    const x=S[k],arr=t+tt(i,k);let fin;
+    if(x.ap!=null){fin=Math.max(arr,x.ap)+x.svc;pen+=Math.max(0,arr-x.ap)*x.w}
+    else{fin=arr+x.svc;if(x.dl!=null)pen+=Math.max(0,(x.arrive?arr:fin)-x.dl)*x.w}
+    if(x.urg)pen+=Math.max(0,arr)*10; // sürgős: a határidők után a legfontosabb
+    return[fin,pen];
+  };
+  const evalO=o=>{let t=0,pen=0,i=sIdx;for(const k of o){[t,pen]=step(t,pen,i,k);i=k+off}return{p:pen,t:t+back(i)}};
+  const better=(a,b)=>a.p<b.p-1e-6||(Math.abs(a.p-b.p)<=1e-6&&a.t<b.t-1e-6);
+  let best=null,bo=null;
+  const consider=o=>{const v=evalO(o);if(!best||better(v,best)){best=v;bo=o.slice()}};
+  if(n<=14&&n>0){
+    const F=1<<n,front=new Array(F*n);
+    const ins=(idx,x)=>{let a=front[idx]||[];if(a.some(y=>y.p<=x.p+1e-9&&y.t<=x.t+1e-9))return;a=a.filter(y=>!(x.p<=y.p+1e-9&&x.t<=y.t+1e-9));a.push(x);if(a.length>4){a.sort((u,v)=>(u.p-v.p)||(u.t-v.t));a.length=4}front[idx]=a};
+    for(let k=0;k<n;k++){const[t,p]=step(0,0,sIdx,k);ins((1<<k)*n+k,{p,t,pj:-1,pi:-1})}
+    for(let m=1;m<F;m++)for(let j=0;j<n;j++){const fr=front[m*n+j];if(!fr)continue;
+      for(let k=0;k<n;k++){if(m&(1<<k))continue;const idx=(m|(1<<k))*n+k;
+        for(let e=0;e<fr.length;e++){const[t,p]=step(fr[e].t,fr[e].p,j+off,k);ins(idx,{p,t,pj:j,pi:e})}}}
+    let bj=-1,be=-1,bv=null;
+    for(let j=0;j<n;j++){const fr=front[(F-1)*n+j];if(!fr)continue;fr.forEach((x,e)=>{const v={p:x.p,t:x.t+back(j+off)};if(!bv||better(v,bv)){bv=v;bj=j;be=e}})}
+    const o=[];let m=F-1,j=bj,e=be;while(j>=0){o.push(j);const x=front[m*n+j][e];m&=~(1<<j);j=x.pj;e=x.pi}
+    consider(o.reverse());
+  }else{
+    const ls=o=>{let cur=o.slice(),cv=evalO(cur),imp=true,g=0;
+      while(imp&&g++<60){imp=false;
+        for(let i=0;i<n;i++)for(let j=0;j<n;j++){if(i===j)continue;const c=cur.slice(),[x]=c.splice(i,1);c.splice(j,0,x);const v=evalO(c);if(better(v,cv)){cur=c;cv=v;imp=true}}
+        for(let i=0;i<n-1;i++)for(let j=i+1;j<n;j++){const c=cur.slice();[c[i],c[j]]=[c[j],c[i]];const v=evalO(c);if(better(v,cv)){cur=c;cv=v;imp=true}}
+        for(let i=0;i<n-1;i++)for(let j=i+1;j<n;j++){const c=cur.slice(0,i).concat(cur.slice(i,j+1).reverse(),cur.slice(j+1));const v=evalO(c);if(better(v,cv)){cur=c;cv=v;imp=true}}
+      }return cur};
+    consider(ls(solvePath(d,sIdx,0,ok.map((_,k)=>k+off)).map(x=>x-off)));
+    consider(ls([...Array(n).keys()].sort((a,b)=>((S[a].ap??S[a].dl??1e9)-(S[b].ap??S[b].dl??1e9)))));
+    let rs=17;const rr=()=>(rs=(rs*1103515245+12345)%2147483648)/2147483648;
+    for(let r=0;r<15;r++){const o=bo.slice();for(let q=0;q<3;q++){const i=Math.floor(rr()*n),j=Math.floor(rr()*n);[o[i],o[j]]=[o[j],o[i]]}consider(ls(o))}
+  }
+  return{order:bo.map(k=>ok[k]),pen:best?best.p:0};
+}
 function solvePath(d,start,end,nodes){
   const n=nodes.length;
   if(n<2)return nodes.slice();
@@ -428,7 +510,7 @@ function model(){
   const legs={traffic:[],osrm:[]},on={},onAll={done:[],strip:[],x:[]},dep={reload:[],end:[]};
   for(const t of all)for(const s of t.stops){
     if(s.status!=='done')continue;const v=visitInfo(s);
-    if(v.onsite!=null&&v.onsite<120*6e4){
+    if(v.onsite!=null&&v.onsite<120*6e4&&!s.appt){
       const m=v.onsite/6e4;
       if(s.type==='depot')dep[s.kind==='end'?'end':'reload'].push(m);
       else{const k=stopKey(s),c=s.cleaner==='strip'?'strip':'done';(on[k]=on[k]||{done:[],strip:[],x:[],all:[]});on[k][c].push(m);on[k].all.push(m);if(!s.members)onAll[c].push(m)}
@@ -465,6 +547,7 @@ function predDrive(plan,src,s,sameB){
 }
 // előrejelzett helyszíni idő (ms)
 const svcMs=s=>{
+  if(s.appt)return(s.appt.dur||60)*6e4;
   const M=model();
   if(s.type==='depot'){const m=M.dep[s.kind==='end'?'end':'reload'];return(m!=null&&m>0?m:(s.kind==='reload'?cfg.reloadMin:0))*6e4}
   const c=s.cleaner==='strip'?'strip':'done',L=M.on[stopKey(s)];
@@ -511,9 +594,14 @@ async function optimize(){
       const u=solvePath(d2,st,Z,U);
       return[...u,...solvePath(d,u[u.length-1],0,R)];
     };
-    const list=ordered(sIdx,ok.map((_,k)=>k+off)).map(x=>ok[x-off]);
-    const chunks=splitRounds(list,cur?used:0,cfg.cap,reloads+1);
-    rounds=chunks.map((c,k)=>ordered(k===0?sIdx:0,c.map(s=>nodeOf.get(s))).map(x=>ok[x-off]));
+    const totalPacks=ok.reduce((t,s)=>t+(s.packs||1),0)+(cur?used:0);
+    if(!reloads&&!(cfg.cap>0&&totalPacks>cfg.cap)){
+      const r=timeOrder(d,src,sIdx,ok,off);rounds=[r.order];   // határidők, időpontok, sürgősek figyelembevételével
+    }else{
+      const list=ordered(sIdx,ok.map((_,k)=>k+off)).map(x=>ok[x-off]);
+      const chunks=splitRounds(list,cur?used:0,cfg.cap,reloads+1);
+      rounds=chunks.map((c,k)=>ordered(k===0?sIdx:0,c.map(s=>nodeOf.get(s))).map(x=>ok[x-off]));
+    }
   }
   if(!today)return;
   const endItem=today.stops.find(s=>s.type==='depot'&&s.kind==='end'&&s.status!=='done')||mkDepot('end');
@@ -554,7 +642,10 @@ async function doPlan(){
   const legs=await legsOf(wp);if(!today)return;
   let t=Date.now(),km=0,ap=false,aptDone=null;
   items.forEach((s,i)=>{const L=legs[i];km+=L.km;ap=ap||L.approx;s.planKm=L.km;s.planMin=L.min;s.planSrc=L.src;
-    s.planPred=predDrive(L.min,L.src,s,L.km<0.05);t+=s.planPred*6e4;s.eta=t;t+=svcMs(s);s.etaDone=t;if(s.type!=='depot')aptDone=t});
+    s.planPred=predDrive(L.min,L.src,s,L.km<0.05);t+=s.planPred*6e4;s.eta=t;
+    if(s.appt){s.wait=Math.max(0,s.appt.start-t);t=Math.max(t,s.appt.start)}else delete s.wait;
+    t+=svcMs(s);s.etaDone=t;if(s.type!=='depot'&&!s.appt)aptDone=t;
+    s.late=s.appt?s.eta>s.appt.start+6e4:!!(s.dl&&s.dl.at&&(s.dl.type==='arrive'?s.eta:s.etaDone)>s.dl.at+6e4)});
   today.remKm=km;today.planApprox=ap;today.planSrc=legs[0]&&legs[0].src;today.aptDoneEta=aptDone;
   pend.forEach((s,i)=>{if(i>0){delete s.legPlanMin;delete s.legPlanKm;delete s.legPlanEta;delete s.svcPlanMin;delete s.legPlanSrc;delete s.legPlanPred}});
   const f0=pend[0];
@@ -571,10 +662,11 @@ function mergeStops(lead){
   const grp=today.stops.filter(s=>s.status!=='done'&&s.type!=='depot'&&addrKeyOf(s)===k);
   if(grp.length<2)return 0;
   const keep=grp[0],members=[];
-  grp.forEach(s=>members.push(...(s.members||[s.name])));
+  [...grp].sort((a,b)=>(a.ord??1e9)-(b.ord??1e9)).forEach(s=>members.push(...(s.members||[s.name]))); // az üzenet sorrendjében
   keep.members=members;keep.name=members.join(', ');
   keep.packs=grp.reduce((t,s)=>t+(s.packs||1),0);
   const ug=grp.find(s=>s.urgent);if(ug)keep.urgent=ug.urgent;
+  const dls=grp.filter(s=>s.dl&&s.dl.at).sort((a,b)=>a.dl.at-b.dl.at);if(dls.length){keep.dl=dls[0].dl;delete keep.nobook}else if(grp.every(s=>s.nobook))keep.nobook=true;
   keep.vnote=grp.map(s=>s.vnote).filter(Boolean).join(' · ')||keep.vnote;
   today.stops=today.stops.filter(s=>s===keep||!grp.includes(s));
   return members.length;
@@ -596,9 +688,9 @@ function splitStop(s){
   delete cfg.mergeAddr[addrKeyOf(s)];
   today.stops.splice(i,1,...parts);
 }
-function newDay(names,date,append,urgent){
+function newDay(names,date,append,urgent,info){
   const U=new Set((urgent||[]).map(norm));
-  const stops=names.map(n=>({id:uid(),name:n,status:'pending',cleaner:'done',packs:1,...(U.has(norm(n))?{urgent:{reason:'üzenetben jelölve',at:Date.now()}}:{})}));
+  const stops=names.map((n,ix)=>({id:uid(),name:n,ord:ix,status:'pending',cleaner:'done',packs:1,...dlFor(n,info,date),...(U.has(norm(n))?{urgent:{reason:'üzenetben jelölve',at:Date.now()}}:{})}));
   if(append&&today){
     const have=new Set(today.stops.filter(s=>s.type!=='depot').flatMap(s=>(s.members||[s.name]).map(norm)));
     const fresh=stops.filter(s=>!have.has(norm(s.name)));
@@ -607,12 +699,13 @@ function newDay(names,date,append,urgent){
     today.stops.splice(ei<0?today.stops.length:ei,0,...fresh);
   }else{
     today={date:date||ld(),startedAt:null,endedAt:null,startPoint:null,stops};
+    if(info&&info.__datefix)today.dateNote=`Az üzenet dátuma (${info.__datefix.replace(/-/g,'.')}.) nem mai volt – a mai napra vettem.`;
     {const mp=LS.get('meterPending',null);if(mp&&Date.now()-mp.at<16*3.6e6){today.meter={home0:mp};today.prices=curPrices()}LS.set('meterPending',null)}
   }
   autoMerge();ensureEnd();save();ui.open=null;render();
 }
-async function loadDay(names,date,add,urgent){
-  newDay(names,date,add,urgent);
+async function loadDay(names,date,add,urgent,info){
+  newDay(names,date,add,urgent,info);
   if(cfg.dataUrl)await syncData(false); // a kódok naponta frissüljenek
   await optimize();
 }
@@ -694,6 +787,8 @@ function logLine(s){
   if(s.key==='kept')p.push(`<span class="late">🔑 nálam maradt${s.keyReturnedAt?' → visszavitte '+fmtT(s.keyReturnedAt):''}</span>`);
   else if(s.key==='back')p.push('🔑 ✓');
   if(s.sameBldg)p.push('🏢 ugyanaz a ház');
+  if(s.codeChange)p.push('🔑 kód átírva: '+esc(s.codeChange.to));
+  if(s.extras&&s.extras.length)p.push('➕ '+s.extras.map(esc).join(', '));
   if(s.todosDone&&s.todosDone.length)p.push('📝 ☑ '+s.todosDone.map(esc).join(', '));
   if(s.todosLeft&&s.todosLeft.length)p.push('<span class="late">📝 ☐ '+s.todosLeft.map(esc).join(', ')+'</span>');
   if(s.urgent)p.push('<span class="late">⚡ sürgős</span>');
@@ -737,13 +832,13 @@ function exportDayCSV(){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='agynemu-futar-napok-'+ld()+'.csv';a.click();
 }
 function exportCSV(){
-  const H=['Dátum','Kör','Sorrend','Típus','Lakás','Cím','Ajtó','Csomag','Takarító','Tervezett érkezés','Leparkolt','Késés (perc)','Tervezett út (perc)','Tényleges út (perc)','Tervezett km','Tényleges km','Parkolástól kész (perc, sétával)','Út+helyszín (perc)','Kész időpont','Kulcs','Sürgős','Probléma','Teendő kész','Teendő maradt','Mai megjegyzés'];
+  const H=['Dátum','Kör','Sorrend','Típus','Lakás','Cím','Ajtó','Csomag','Takarító','Tervezett érkezés','Leparkolt','Késés (perc)','Tervezett út (perc)','Tényleges út (perc)','Tervezett km','Tényleges km','Parkolástól kész (perc, sétával)','Út+helyszín (perc)','Kész időpont','Kulcs','Sürgős','Probléma','Teendő kész','Teendő maradt','Extra','Kódcsere','Mai megjegyzés'];
   const rows=[H],m=x=>x==null?'':Math.round(x/6e4),k=x=>x==null?'':x.toFixed(1).replace('.',',');
   for(const t of [...(today?[today]:[]),...days]){
     t.stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt).forEach((s,i)=>{
       const v=visitInfo(s),dp=s.type==='depot';
       rows.push([t.date,s.round||'',i+1,dp?(s.kind==='end'?'raktár (vég)':'raktár (újratöltés)'):'lakás',dp?'':s.name,s.addr||'',s.door||'',dp?'':(s.packs||1),dp?'':s.cleaner==='strip'?'lehúzás':'takarító kész',
-        s.legPlanEta?fmtT(s.legPlanEta):'',s.arrivedAt?fmtT(s.arrivedAt):'',m(v.delay),m(v.planDrive),m(v.drive),k(s.legPlanKm),k(s.legKm),m(v.onsite),m(v.cycle),fmtT(s.doneAt),s.key==='kept'?'nálam maradt'+(s.keyReturnedAt?' (visszavitte '+fmtT(s.keyReturnedAt)+')':''):s.key==='back'?'visszarakva':'',s.urgent?(s.urgent.reason||'igen'):'',(s.problems||[]).map(x=>x.type+(x.text?': '+x.text:'')).join(' | '),(s.todosDone||[]).join(' | '),(s.todosLeft||[]).join(' | '),s.vnote||'']);
+        s.legPlanEta?fmtT(s.legPlanEta):'',s.arrivedAt?fmtT(s.arrivedAt):'',m(v.delay),m(v.planDrive),m(v.drive),k(s.legPlanKm),k(s.legKm),m(v.onsite),m(v.cycle),fmtT(s.doneAt),s.key==='kept'?'nálam maradt'+(s.keyReturnedAt?' (visszavitte '+fmtT(s.keyReturnedAt)+')':''):s.key==='back'?'visszarakva':'',s.urgent?(s.urgent.reason||'igen'):'',(s.problems||[]).map(x=>x.type+(x.text?': '+x.text:'')).join(' | '),(s.todosDone||[]).join(' | '),(s.todosLeft||[]).join(' | '),(s.extras||[]).join(' | '),s.codeChange?s.codeChange.from+' → '+s.codeChange.to:'',s.vnote||'']);
     });
   }
   if(rows.length===1){toast('Még nincs naplózott tétel');return}
@@ -758,16 +853,25 @@ function deadlineMs(dateStr){
 }
 function deadlineLine(){
   if(!today)return'';
-  const dl=deadlineMs(ld());if(!dl)return'';
   const pend=today.stops.filter(s=>s.status!=='done'&&s.type!=='depot');
-  if(!pend.length){const last=today.stops.filter(s=>s.type!=='depot'&&s.doneAt).reduce((m,s)=>Math.max(m,s.doneAt),0);
-    return last?`<div class="dl">⏰ Utolsó lakás kész: ${fmtT(last)} ${last<=dl?'✅ határidőn belül':'<span class="late">– '+fmtDur(last-dl)+' késés</span>'}</div>`:''}
-  const e=today.aptDoneEta;if(!e)return'';
-  const late=e>dl,urg=pend.filter(s=>s.urgent).length;
-  return`<div class="dl ${late?'bad':''}">⏰ Utolsó lakás várhatóan: <b>${fmtT(e)}</b> · határidő ${esc(cfg.deadline)} · ${late?'<span class="late">'+fmtDur(e-dl)+' csúszás!</span>':'<span class="early">'+fmtDur(dl-e)+' tartalék</span>'}${urg?` · ⚡ ${urg} sürgős előre véve`:''}</div>`;
+  const lim=s=>s.appt?s.appt.start:s.dl&&s.dl.at;
+  if(!pend.length){
+    const dn=today.stops.filter(s=>s.status==='done'&&s.type!=='depot'&&lim(s));
+    const lt=dn.filter(s=>(s.appt||s.dl.type==='arrive'?(s.arrivedAt||s.doneAt):s.doneAt)>lim(s)+6e4);
+    return dn.length?`<div class="dl ${lt.length?'bad':''}">${lt.length?'⚠ Késve: '+lt.map(s=>esc(s.name)).join(', '):'✅ Minden határidőn belül'}</div>`:'';
+  }
+  const late=pend.filter(s=>s.late);
+  const at=s=>s.appt||(s.dl&&s.dl.type==='arrive')?s.eta:s.etaDone;
+  const lab=s=>s.appt?fmtT(s.appt.start):esc(s.dl.label);
+  if(late.length)return`<div class="dl bad">⚠ <b>${late.length} határidő csúszik:</b> ${late.map(s=>`${esc(s.name)} (${lab(s)} → ~${fmtT(at(s))})`).join(', ')}<br><span class="small">Nyomd meg az „🧭 Útvonal újratervezése” gombot; ha így is késik, szólj a koordinátornak.</span></div>`;
+  const W=pend.filter(s=>lim(s)&&s.eta);
+  const slack=s=>lim(s)-at(s);
+  const tight=W.sort((a,b)=>slack(a)-slack(b))[0];
+  const free=pend.filter(s=>s.nobook).length;
+  return(today.dateNote?`<div class="dl">📅 ${esc(today.dateNote)}</div>`:'')+`<div class="dl">✅ Minden határidő tartható${tight?` · legszorosabb: <b>${esc(tight.name)}</b> ${lab(tight)} (${fmtDur(slack(tight))} tartalék)`:''}${free?` · 🔓 ${free} bármikor`:''}${today.aptDoneEta?` · utolsó lakás ~${fmtT(today.aptDoneEta)}`:''}</div>`;
 }
 function dayStats(t){
-  const apt=t.stops.filter(s=>s.type!=='depot'),done=apt.filter(s=>s.status==='done');
+  const apt=t.stops.filter(s=>s.type!=='depot'&&!s.appt),done=apt.filter(s=>s.status==='done');
   const dn=t.stops.filter(s=>s.status==='done');
   const end=t.endedAt||Date.now();
   return{done:done.length,total:apt.length,km:dn.reduce((a,s)=>a+(s.legKm||0),0),approx:dn.some(s=>s.approx),ms:t.startedAt?end-t.startedAt:0};
@@ -815,7 +919,7 @@ function importRows(rows,opt){
   }else map={name:[0],addr:[1],code:[2],help:[3]};
   const nameCol=map.name[0];
   const val=(r,f)=>{const cols=map[f]||[];return cols.map(c=>{const v=cleanV(r[c]&&r[c].t);if(!v)return'';return(cols.length>1&&hdr[c]&&f!=='addr')?`${hdr[c]}: ${v}`:v}).filter(Boolean).join(f==='addr'?', ':'\n')};
-  let n=0,changed=0,sect='',prevEmpty=true;
+  let n=0,changed=0,sect='',prevEmpty=true;const groups={};
   for(const r of rows.slice(hi+1)){
     const empty=!r.some(c=>cleanV(c.t)||c.l);
     if(empty){sect='';prevEmpty=true;continue}
@@ -838,10 +942,11 @@ function importRows(rows,opt){
     if(opt.hasLinks&&map.help)nv.helpUrl=link;
     const old=apts[k];
     const upd={...(old||{note:''}),name,sect,old:!!opt.old,aliases};
-    upd.manual={...((old&&old.manual)||{})};
+    upd.manual={...((old&&old.manual)||{})};upd.mine={...((old&&old.mine)||{})};
     const prev={};
     for(const[f,v]of Object.entries(nv)){
       if(v===undefined)continue;
+      if(upd.mine[f]){if(v===upd.mine[f].from)continue;delete upd.mine[f]} // a táblázatban még a régi kód van → a tiéd marad
       if(!v&&upd.manual[f])continue;          // kézzel beírt adatot üres cella nem töröl
       if(v)delete upd.manual[f];
       if(old&&CODE_FIELDS.includes(f)&&old[f]&&v&&old[f]!==v)prev[f]=old[f];
@@ -850,6 +955,13 @@ function importRows(rows,opt){
     if(Object.keys(prev).length){upd.prev=prev;upd.codeChanged=Date.now();upd.prevCode=prev.code||'';changed++}
     if(old&&old.address!==upd.address){delete upd.lat;delete upd.lon;delete upd.geoAddr;delete upd.geoManual;delete upd.geoOk}
     apts[k]=upd;n++;
+    if(name.includes(',')){const pre=name.split(',')[0].trim();if(pre.length>=3)(groups[pre]=groups[pre]||[]).push({room:name.split(',').slice(1).join(',').trim(),gate:upd.gate,code:upd.code})}
+  }
+  // „VÁCI 57, Room 202…” sorokból közös lakás: „VÁCI 57” (a Viberben így jön: VÁCI-57) – a szobák kódjaival
+  for(const[pre,rs]of Object.entries(groups)){
+    if(rs.length<2)continue;const gk=norm(pre);if(seen.has(gk))continue;
+    const old=apts[gk]||{note:'',manual:{}};
+    apts[gk]={...old,name:pre,group:true,aliases:old.aliases||[],help:'Szobák kódjai:\n'+rs.map(r=>`${r.room}: ${[r.gate,r.code].filter(Boolean).join(' / ')||'–'}`).join('\n'),address:old.address||''};
   }
   return{n,changed};
 }
@@ -981,7 +1093,8 @@ function topBar(){
 function pasteBox(has){
   return`<div class="card pad"><div class="lbl" style="margin-top:0">Reggeli üzenet beillesztése</div>
   <textarea id="paste" placeholder="2026.11.02.&#10;@Mate&#10;DOHÁNY-2 🥀&#10;HOLLÓ 🪶">${esc(ui.paste)}</textarea>
-  <div class="row"><button class="pri flex1" data-act="load" data-mode="new">Új nap</button>${has?'<button class="flex1" data-act="load" data-mode="add">+ Hozzáadás a mához</button>':''}</div></div>`+(has&&today?(()=>{
+  <div class="row"><button class="flex1" data-act="clipMsg">📥 Vágólapról</button><button class="pri flex1" data-act="load" data-mode="new">Új nap</button>${has?'<button class="flex1" data-act="load" data-mode="add">+ Hozzáadás a mához</button>':''}</div>
+  <div class="small mut" style="margin-top:6px">WhatsAppból: hosszan nyomva Másolás, utána „📥 Vágólapról”. A napi listát és a takarítói kéréseket (teendő) is felismeri.</div></div>`+(has&&today?(()=>{
     const lb=today.lastBatch?today.stops.filter(s=>s.batch===today.lastBatch&&s.status!=='done'):[];
     return`<div class="card pad"><div class="lbl" style="margin-top:0">Lista kezelése</div><div class="row" style="margin-top:4px">${lb.length?`<button class="flex1" data-act="undoBatch">↩ Utolsó hozzáadás visszavonása (${lb.length} lakás: ${esc(lb.slice(0,3).map(s=>s.name).join(', '))}${lb.length>3?'…':''})</button>`:''}<button class="bad flex1" data-act="discardDay">🗑 Mai lista törlése</button></div></div>`})():'');
 }
@@ -990,7 +1103,7 @@ function actRow(s,a){
   const url=wazeUrl(depot?depotObj():a);
   const arr=s.arrivedAt?`<span class="tag" style="align-self:center">🅿 ${fmtT(s.arrivedAt)}</span>`:`<button class="flex1" data-act="arrive" data-id="${s.id}">${s.type==='depot'?'🅿 Megérkeztem':'🅿 Leparkoltam'}</button>`;
   return`<div class="acts"><div class="row" style="margin-top:0"><a class="btn navbtn ${url?'':'dis'}" ${url?`href="${esc(url)}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>Navigálás</a>${arr}</div>
-  <div class="row">${depot?`<button class="okb flex1" data-act="done" data-id="${s.id}">✔ ${end?'Leadtam':'Újratöltöttem'}</button>`:`<button class="okb" style="flex:2" data-act="doneViber" data-id="${s.id}">✔ Kész + 💬 Viber</button><button class="flex1" data-act="done" data-id="${s.id}">✔ Kész</button>`}</div></div>`;
+  <div class="row">${depot?`<button class="okb flex1" data-act="done" data-id="${s.id}">✔ ${end?'Leadtam':'Újratöltöttem'}</button>`:`<button class="okb" style="flex:2" data-act="doneViber" data-id="${s.id}">✔ Kész + 💬 Üzenet</button><button class="flex1" data-act="done" data-id="${s.id}">✔ Kész</button>`}</div></div>`;
 }
 function codesLine(a){
   if(!a)return'';
@@ -1010,7 +1123,7 @@ function aptDetail(a){
     h+=`<div class="lbl">🔄 Kódváltozás (${new Date(a.codeChanged).toLocaleDateString('hu-HU')})</div><div class="small">`+
       Object.entries(a.prev).map(([f,v])=>`${FL[f]||f}: <s>${esc(v)}</s> → <b>${esc(a[f]||'–')}</b>`).join('<br>')+'</div>';
   if(a.gate)h+=`<div class="lbl">Kapukód</div><div class="code m">${esc(a.gate)}</div>`;
-  if(a.code)h+=`<div class="lbl">Kulcsőr / ajtókód</div><div class="code">${esc(a.code)}</div>`;
+  if(a.code)h+=`<div class="lbl">Kulcsőr / ajtókód${a.mine&&a.mine.code?' <span class="bdg">✏️ általad átírva</span>':''}</div><div class="code">${esc(a.code)}</div>`;
   if(a.spare)h+=`<div class="lbl">Pótkulcsőr</div><div class="code m">${esc(a.spare)}</div>`;
   if(a.keySpot)h+=`<div class="lbl">Takarítós kulcs helye</div><div class="pre">${esc(a.keySpot)}</div>`;
   if(a.door)h+=`<div class="lbl">Ajtószám / emelet</div><div>${esc(a.door)}</div>`;
@@ -1054,8 +1167,49 @@ function depotCard(s){
   }
   return h+'</div>';
 }
+function dlBadge(s,done){
+  if(s.appt)return'';
+  if(s.nobook)return`<span class="dlb free">🔓 bármikor</span>`;
+  if(s.dl&&s.dl.at)return`<span class="dlb ${!done&&s.late?'late':''}">⏰ ${s.dl.type==='arrive'?'':'kész: '}${esc(s.dl.label)}${s.dl.def?' (alap)':''}</span>`;
+  return'';
+}
+function dlEditor(s){
+  return`<div class="lbl">⏰ Határidő${s.info?` <span class="mut" style="text-transform:none">(üzenetben: ${esc(s.info)})</span>`:''}</div>
+  <div class="row" style="margin-top:0"><input type="time" data-dl="${s.id}" value="${s.dl&&s.dl.at?hhmm(s.dl.at):''}" style="flex:1;margin:0">
+  <button class="${s.dl&&s.dl.type==='arrive'?'on':''}" data-act="dlArrive" data-id="${s.id}">🚪 odaérni</button>
+  <button class="${s.nobook?'on':''}" data-act="dlNone" data-id="${s.id}">🔓 bármikor</button></div>`;
+}
+function apptCard(s){
+  const a=getApt(s),open=ui.open===s.id,done=s.status==='done',st=s.appt.start,en=st+(s.appt.dur||60)*6e4,url=a?wazeUrl(a):null;
+  let h=`<div class="card stop ${done?'done':''}" style="border-left:5px solid #8b5cf6">
+  <div class="plan"><span>🕐 ${done?'Teljesítve':'Érkezés'}: <b class="${!done&&s.late?'late':''}">${done?fmtT(s.doneAt):(s.eta?fmtT(s.eta):'–')}</b>${!done&&s.wait>60000?` <span class="mut">(+${Math.round(s.wait/6e4)} p várakozás)</span>`:''}</span><span class="dlb appt">📅 időpont</span></div>
+  <div class="head" data-act="toggle" data-id="${s.id}"><div class="grow"><b class="nm">📅 ${esc(s.name)} · ${fmtT(st)}–${fmtT(en)}</b>
+  <div class="small">${a&&a.address?esc(a.address):'<span class="warn">nincs cím – koppints rá</span>'}</div>${done?`<div class="log">${logLine(s)}</div>`:''}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
+  if(!done)h+=`<div class="acts"><div class="row" style="margin-top:0"><a class="btn navbtn ${url?'':'dis'}" ${url?`href="${esc(url)}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>Navigálás</a>${s.arrivedAt?`<span class="tag" style="align-self:center">🅿 ${fmtT(s.arrivedAt)}</span>`:`<button class="flex1" data-act="arrive" data-id="${s.id}">🅿 Leparkoltam</button>`}</div>
+    <div class="row"><button class="okb flex1" data-act="done" data-id="${s.id}">✔ Végeztem</button></div></div>`;
+  if(open){
+    h+=`<div class="body"><div class="lbl">Kezdés · időtartam (perc)</div><div class="row" style="margin-top:0"><input type="time" data-apst="${s.id}" value="${hhmm(st)}" style="flex:1;margin:0"><input data-apdur="${s.id}" inputmode="numeric" value="${s.appt.dur||60}" style="width:90px;margin:0"></div>
+    ${a?`<div class="lbl">Cím</div><input data-f="address" data-key="${esc(norm(a.name))}" data-name="${esc(a.name)}" value="${esc(a.address||'')}">`:''}
+    <div class="row">${done?`<button data-act="undo" data-id="${s.id}">↩ Visszavon</button>`:''}<button class="bad" data-act="del" data-id="${s.id}">✕ Törlés</button></div></div>`;
+  }
+  return h+'</div>';
+}
+function apptModal(){
+  const m=ui.modal,opts=Object.values(apts).filter(a=>a.apptMin||!a.old).sort((x,y)=>(!!y.apptMin-!!x.apptMin)||x.name.localeCompare(y.name,'hu')).map(a=>`<option value="${esc(a.name)}">${esc(a.address||'')}</option>`).join('');
+  const last=apts[norm(cfg.lastAppt||'Barlai')];
+  return`<div class="ov"><div class="modal">
+    <div class="mt">📅 Időpontos program</div>
+    <div class="lbl" style="margin-top:0">Hely</div><input id="apPlace" list="dl-appt" value="${esc(last?last.name:'')}"><datalist id="dl-appt">${opts}</datalist>
+    <div class="row" style="margin-top:6px"><div class="flex1"><div class="lbl" style="margin-top:0">Kezdés</div><input id="apStart" type="time" value="${esc(cfg.lastApptStart||'11:00')}" style="margin:0"></div>
+    <div><div class="lbl" style="margin-top:0">Perc</div><input id="apDur" inputmode="numeric" value="${(last&&last.apptMin)||60}" style="width:90px;margin:0"></div></div>
+    <div class="small mut">A tervező ehhez igazítja a napot: ha korábban odaérsz, várakozást számol.</div>
+    <button class="okb" data-act="apptSave">💾 Hozzáadás a mai naphoz</button>
+    <button data-act="apptCancel">Mégse</button>
+  </div></div>`;
+}
 function stopCard(s){
   if(s.type==='depot')return depotCard(s);
+  if(s.appt)return apptCard(s);
   const a=getApt(s),key=aptKey(s),open=ui.open===s.id,done=s.status==='done';
   const viber='viber://forward?text='+encodeURIComponent(cfg.template.replace('{név}',s.name));
   const cl=s.cleaner==='strip'?'🧺 lehúzás':'';
@@ -1064,7 +1218,8 @@ function stopCard(s){
   const mapped=a&&norm(a.name)!==norm(s.name)?` <span class="mut small">→ ${esc(a.name)}</span>`:'';
   const openIss=a&&(a.issues||[]).filter(x=>!x.resolvedAt).length;
   let h=`<div class="card stop ${done?'done':''} ${!done&&s.urgent?'urg':''}">
-  <div class="plan"><span>🕐 ${done?'Teljesítve':'Tervezett érkezés'}: <b class="${!done&&s.etaDone&&deadlineMs(today&&today.date)&&s.etaDone>deadlineMs(today.date)?'late':''}">${done?fmtT(s.doneAt):(s.eta?fmtT(s.eta):'–')}</b></span><span>📦 <b>${s.packs||1}</b> csomag ${cl}</span></div>
+  <div class="plan"><span>🕐 ${done?'Teljesítve':'Tervezett érkezés'}: <b class="${!done&&s.late?'late':''}">${done?fmtT(s.doneAt):(s.eta?fmtT(s.eta):'–')}</b></span><span>📦 <b>${s.packs||1}</b> csomag ${cl}</span></div>
+  ${dlBadge(s,done)?`<div class="dlrow">${dlBadge(s,done)}</div>`:''}
   <div class="head" data-act="toggle" data-id="${s.id}"><div class="grow"><b class="nm">${a&&a.address?'':'<span class="warn">⚠</span> '}${esc(s.name)}</b>${!done&&s.urgent?` <span class="ubdg">⚡ SÜRGŐS${s.urgent.reason&&s.urgent.reason!=='üzenetben jelölve'?' · '+esc(s.urgent.reason):''}</span>`:''}${openIss?` <span class="ibdg">⚠ ${openIss} jelzés</span>`:''}${(()=>{const n=stopTodos(s).length;return n&&!done?` <span class="tbdg">📝 ${n} teendő</span>`:''})()}${mapped}${!done&&sameSet[s.id]?' <span class="same">🏢 ugyanez a ház</span>':''}${recent?' <span class="bdg">🔄 új kód</span>':''}${a&&a.old?' <span class="old">régi</span>':''}${a&&a.note?' 📝':''}
   <div class="small">${a?(a.address?esc(a.address):'<span class="warn">nincs cím a táblázatban</span>'):'<span class="warn">nincs meg a táblázatban – koppints rá</span>'}</div>
   ${a&&a.door?`<div class="small mut">Ajtó: ${esc(a.door)}</div>`:''}
@@ -1072,7 +1227,7 @@ function stopCard(s){
   ${done?`<div class="log">${logLine(s)}</div>`:codesLine(a)}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
   if(!done&&groupLead[s.id])h+=`<div class="acts" style="padding-bottom:0"><button class="flex1" style="width:100%" data-act="merge" data-id="${s.id}">🔗 Egy helyre megy mind a ${groupLead[s.id]} lakás? Összevonás</button></div>`;
   if(!done)h+=actRow(s,a);
-  else h+=`<div class="acts"><div class="row" style="margin-top:0"><button class="flex1" data-act="viber" data-id="${s.id}">💬 Viber: „${esc(viberText(s))}”</button></div></div>`;
+  else h+=`<div class="acts"><div class="row" style="margin-top:0"><button class="flex1" data-act="viber" data-id="${s.id}">💬 Üzenet újraküldése</button></div></div>`;
   if(open){
     h+='<div class="body">';
     if(s.members){
@@ -1086,10 +1241,12 @@ function stopCard(s){
     h+=`<div class="lbl">Csomag</div><div class="stepper"><button data-act="packs" data-id="${s.id}" data-d="-1">−</button><b>${s.packs||1}</b><button data-act="packs" data-id="${s.id}" data-d="1">+</button></div>
     <div class="lbl">Takarító</div>
     <div class="row" style="margin-top:0"><button class="flex1 ${s.cleaner==='strip'?'on':''}" data-act="strip" data-id="${s.id}">${s.cleaner==='strip'?'🧺 Én húzom le – bekapcsolva (koppints a visszavonáshoz)':'✅ A takarító végzett · 🧺 Nekem kell lehúzni?'}</button></div>
+    ${done?'':dlEditor(s)}
     ${done?'':`<div class="lbl">Sürgős? (előre veszi a tervező)</div><div class="chips">${['kukászsák','törölköző','ágynemű','takarító vár','egyéb'].map(r=>`<button class="${s.urgent&&s.urgent.reason===r?'on':''}" data-act="urg" data-id="${s.id}" data-v="${r}">⚡ ${r}</button>`).join('')}${s.urgent?`<button data-act="urg" data-id="${s.id}" data-v="">✕ nem sürgős</button>`:''}</div>`}
     ${todoBlock(s,done)}
     ${(s.todosDone&&s.todosDone.length)||(s.todosLeft&&s.todosLeft.length)?`<div class="small" style="margin-top:6px">${(s.todosDone||[]).map(x=>'☑ '+esc(x)).join('<br>')}${(s.todosLeft||[]).length?'<br>'+s.todosLeft.map(x=>'<span class="late">☐ '+esc(x)+'</span>').join('<br>'):''}</div>`:''}
-    <div class="row"><button class="flex1" data-act="prob" data-id="${s.id}" style="border-color:var(--warn);color:var(--warn)">⚠ Probléma jelzése</button></div>
+    <div class="row"><button class="flex1" data-act="prob" data-id="${s.id}" style="border-color:var(--warn);color:var(--warn)">⚠ Probléma jelzése</button><button class="flex1" data-act="codeChg" data-id="${s.id}">🔑 Kulcsőr kódot átírtam</button></div>
+    ${s.codeChange?`<div class="small">🔑 Kód átírva: <s>${esc(s.codeChange.from)}</s> → <b>${esc(s.codeChange.to)}</b></div>`:''}
     ${(s.problems||[]).map(p=>`<div class="issue small"><b>⚠ ${esc(p.type)}</b> · ${fmtT(p.at)}${p.text?'<br>'+esc(p.text):''}</div>`).join('')}
     <div class="lbl">Megjegyzés (a lakáshoz mentve)</div>
     <textarea data-f="note" ${fa}>${esc(a?.note||'')}</textarea>
@@ -1120,7 +1277,7 @@ function viewToday(){
   const homeBtn=cfg.meterAsk!=='0'&&!(today&&(today.startedAt||(today.meter&&today.meter.home0)))&&!(!today&&LS.get('meterPending',null)&&Date.now()-LS.get('meterPending',{}).at<16*3.6e6)?`<div class="row" style="margin:0 0 10px"><button class="flex1" data-act="meterOpen" data-which="home0" data-date="${today?esc(today.date):''}">🏠 Indulok otthonról – ⛽ óraállás</button></div>`:'';
   if(!today)return h+homeBtn+pasteBox(false);
   h+=homeBtn;
-  const stops=today.stops,apt=stops.filter(s=>s.type!=='depot'),dep=stops.filter(s=>s.type==='depot');
+  const stops=today.stops,apt=stops.filter(s=>s.type!=='depot'&&!s.appt),dep=stops.filter(s=>s.type==='depot');
   const st=dayStats(today),ap=today.planApprox?'~':'';
   const nxt=stops.find(s=>s.status!=='done');
   const T=(l,v,id)=>`<div class="tile"><i>${l}</i><b${id?` id="${id}"`:''}>${v}</b></div>`;
@@ -1135,7 +1292,7 @@ function viewToday(){
   ${T('Eltelt idő',today.startedAt?hm(st.ms):'–','clock')}
   </div>`;
   h+=`<div class="row" style="margin:0 0 10px">${!today.startedAt?'<button class="okb flex1" data-act="start">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end">⏹ Munka vége</button>'}
-  <button class="pri flex1" data-act="optimize">🧭 Útvonal újratervezése</button></div>`+deadlineLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
+  <button class="pri flex1" data-act="optimize">🧭 Útvonal újratervezése</button></div>`+`<div class="row" style="margin:0 0 10px"><button class="flex1" data-act="apptNew">📅 + Időpontos program (pl. Barlai)</button></div>`+deadlineLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
   const pend=stops.filter(s=>s.status!=='done');
   const doneL=stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt);
   let r=doneL.filter(s=>s.type==='depot').length+1,startRound=true;
@@ -1209,7 +1366,7 @@ function monthCard(){
     if(d.startedAt)starts.push(new Date(d.startedAt).getHours()*60+new Date(d.startedAt).getMinutes());
     if(d.endedAt)ends.push(new Date(d.endedAt).getHours()*60+new Date(d.endedAt).getMinutes());
     let last=0;
-    for(const s of d.stops){if(s.type==='depot'||s.status!=='done')continue;
+    for(const s of d.stops){if(s.type==='depot'||s.appt||s.status!=='done')continue;
       const n=s.members?s.members.length:1;apt+=n;packs+=s.packs||1;
       if(s.cleaner==='strip')strip+=n;else cl+=n;if(s.key==='kept')keys++;probs+=(s.problems||[]).length;if(s.urgent)urg++;last=Math.max(last,s.doneAt)}
     const dl=deadlineMs(d.date);if(dl&&last){dlN++;if(last<=dl)onDl++}
@@ -1266,7 +1423,7 @@ function viewSet(){
   ${num('stripMin','Extra idő, ha nekem kell lehúzni (perc)')}
   ${num('reloadMin','Újratöltés ideje a raktárban (perc)')}
   <div class="lbl">Viber üzenet sablon ({név} = lakás neve)</div><input data-cfg="template" value="${esc(cfg.template)}">
-  <div class="lbl">Határidő: minden lakás kész legyen eddig</div><input data-cfg="deadline" type="time" value="${esc(cfg.deadline||'')}">
+  <div class="lbl">Alap határidő (ha a reggeli üzenet nem ír mást a lakáshoz)</div><input data-cfg="deadline" type="time" value="${esc(cfg.deadline||'')}">
   </div><div class="card pad"><div class="lbl" style="margin-top:0">⛽ Autó (plug-in hibrid)</div>
   <div class="mgrid"><div><div class="lbl">Áram Ft/kWh</div><input data-cfg="elecPrice" inputmode="decimal" value="${esc(cfg.elecPrice||'')}" placeholder="otthoni"></div>
   <div><div class="lbl">Benzin Ft/L</div><input data-cfg="fuelPrice" inputmode="decimal" value="${esc(cfg.fuelPrice||'')}"></div>
@@ -1285,9 +1442,15 @@ function viewSet(){
   <div class="row"><button class="flex1" data-act="mbTest">🚦 Kapcsolat teszt</button></div>
   <div class="mut small" style="margin-top:6px">Ingyenes regisztráció kártya nélkül: mapbox.com → Sign up → Account → <b>Default public token</b> (pk.-val kezdődik), ide másold. Kártya nélkül havonta 10 000 mátrix-elem és 10 000 útvonal-kérés ingyenes. ${(()=>{const u=LS.get('mbUse',{});return u.m===new Date().toISOString().slice(0,7)?`Ebben a hónapban: ${u.el||0} elem, ${u.rq||0} kérés.`:''})()} A token csak ezen a telefonon tárolódik, a GitHubra nem kerül fel.</div>
   <div class="mut small" style="margin-top:4px">Üresen hagyva a naplódból tanulja: mennyivel tart tovább az út a parkolásig a tisztán vezetett időnél (forgalom, parkolóhely-keresés). A séta a lakásig a lakásonkénti helyszíni időben van. A tervezett érkezésekhez adja hozzá.</div>
-  <div class="lbl">Viber küldés módja</div><select data-cfg="viberMode" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
-    <option value="share" ${cfg.viberMode!=='link'?'selected':''}>Megosztás menü (ajánlott) – Viber → csoport kiválasztása</option>
-    <option value="link" ${cfg.viberMode==='link'?'selected':''}>Közvetlen Viber link</option></select>
+  <div class="lbl">Üzenet küldése</div><select data-cfg="viberMode" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
+    <option value="share" ${(cfg.viberMode||'share')==='share'?'selected':''}>Megosztás menü (ajánlott) – WhatsApp vagy Viber → csoport</option>
+    <option value="wa" ${cfg.viberMode==='wa'?'selected':''}>Közvetlenül WhatsApp</option>
+    <option value="link" ${cfg.viberMode==='link'?'selected':''}>Közvetlenül Viber</option></select>
+  <div class="lbl">Üzenet formája</div><select data-cfg="msgStyle" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
+    <option value="short" ${(cfg.msgStyle||'short')==='short'?'selected':''}>Rövid, egy sorban – „VÍG-1 kész, lehúztam, WC-papír pótolva”</option>
+    <option value="long" ${cfg.msgStyle==='long'?'selected':''}>Részletes, soronként, emojikkal</option></select>
+  <div class="lbl">„Kész” ablak (lehúzás, extrák, kódcsere)</div><select data-cfg="doneAsk" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
+    <option value="1" ${cfg.doneAsk!=='0'?'selected':''}>Mindig kérdezzen</option><option value="0" ${cfg.doneAsk==='0'?'selected':''}>Csak ha teendő vagy kulcs-kérdés van</option></select>
   <div class="mut small" style="margin-top:4px">Az üzenet szövege mindig a vágólapra is kerül, így végszükség esetén csak be kell illesztened.</div>
   <div class="lbl">Város (ha a cím nem tartalmazza)</div><input data-cfg="city" value="${esc(cfg.city)}"></div>
   <div class="card pad"><div class="lbl" style="margin-top:0">A táblázat linkje (megnyitás + automatikus frissítés)</div>
@@ -1305,6 +1468,48 @@ function viewSet(){
   <div class="mut small" style="margin-top:6px">A frissítés nem törli az adataidat.</div></div>`;
 }
 const viberText=s=>cfg.template.replace('{név}',s.name);
+const EXTRA_CHIPS=['🧻 WC-papír pótolva','🗑 Kukászsák pótolva','🧺 Törölköző pótolva','☕ Kávé / cukor pótolva','🧴 Tisztítószer pótolva','🧹 Plusz takarítás'];
+// Kész-üzenet: név + minden, amit jelezni kell (lehúzás, kódcsere, teendők, extrák, problémák, kulcs, megjegyzés)
+function doneMessage(s,mx){
+  mx=mx||{};
+  const strip=mx.strip!=null?mx.strip:s.cleaner==='strip';
+  const extras=mx.extras?mx.extras.map(t=>t.replace(/^\S+\s/,'').trim()).concat(mx.other&&mx.other.trim()?[mx.other.trim()]:[]):(s.extras||[]);
+  const a=getApt(s);
+  const cc=mx.code&&mx.code.trim()&&a&&mx.code.trim()!==a.code?{from:a.code||'',to:mx.code.trim()}:s.codeChange;
+  const todosDone=mx.todosDone||s.todosDone||[],todosLeft=mx.todosLeft||s.todosLeft||[];
+  const key=mx.key||s.key;
+  if((cfg.msgStyle||'short')==='short'){
+    const p=[];
+    if(strip)p.push('lehúztam');
+    if(cc)p.push(`kulcsőr kód: ${cc.to}${cc.from?' (régi: '+cc.from+')':''}`);
+    todosDone.forEach(t=>p.push(t));
+    extras.forEach(t=>p.push(t));
+    (s.problems||[]).forEach(x=>p.push('⚠ '+x.type+(x.text?': '+x.text:'')));
+    todosLeft.forEach(t=>p.push('nem sikerült: '+t));
+    if(key==='kept')p.push('a kulcs nálam maradt');
+    if(s.vnote)p.push(s.vnote);
+    return viberText(s)+(p.length?', '+p.join(', '):'');
+  }
+  const L=[viberText(s)];
+  if(strip)L.push('🧺 Az ágyneműt én húztam le');
+  if(cc)L.push(`🔑 Kulcsőr kódot átírtam: ${cc.to}${cc.from?' (régi: '+cc.from+')':''}`);
+  todosDone.forEach(t=>L.push('✅ '+t));
+  extras.forEach(t=>L.push('✅ '+t));
+  (s.problems||[]).forEach(p=>L.push('⚠ '+p.type+(p.text?': '+p.text:'')));
+  todosLeft.forEach(t=>L.push('⏳ Nem sikerült: '+t));
+  if(key==='kept')L.push('🔑 A kulcs nálam maradt, visszaviszem');
+  if(s.vnote)L.push('📝 '+s.vnote);
+  return L.join('\n');
+}
+// kulcsőr kód átírása: a lakásnál frissül, a naplóba és az üzenetbe kerül; a táblázat régi kódja nem írja vissza
+function applyCodeChange(s,nv){
+  const a=getApt(s);nv=String(nv||'').trim();if(!a||!nv||nv===a.code)return false;
+  const from=a.code||'';
+  s.codeChange={from,to:nv,at:Date.now()};
+  a.mine=a.mine||{};a.mine.code={from:(a.mine.code&&a.mine.code.from)||from,to:nv,at:Date.now()};
+  a.prev={...(a.prev||{}),code:from};a.code=nv;a.codeChanged=Date.now();
+  return true;
+}
 const stopApts=s=>{const L=(s.members||[s.name]).map(findApt).filter(Boolean);return[...new Set(L)]};
 const openTodos=a=>(a&&a.todos||[]).filter(t=>!t.doneAt);
 const stopTodos=s=>stopApts(s).flatMap(a=>openTodos(a).map(t=>({a,t})));
@@ -1396,8 +1601,9 @@ function saveMeter(){
   else toast('⛽ Elmentve');
 }
 function askDone(stop,viber){
-  if(stop.type==='depot'||(cfg.keyAsk==='0'&&!stopTodos(stop).length)){if(viber)sendViber(viberText(stop));markDone(stop.id);return}
-  ui.todoChk={};
+  if(stop.appt){markDone(stop.id);return}
+  if(stop.type==='depot'||(cfg.keyAsk==='0'&&cfg.doneAsk==='0'&&!stopTodos(stop).length)){if(viber)sendViber(doneMessage(stop));markDone(stop.id);return}
+  ui.todoChk={};ui.mxPhoto=null;ui.mx={extras:[],other:'',code:'',strip:stop.cleaner==='strip'};
   ui.modal={id:stop.id,viber:!!viber};render();
 }
 function finishModal(answer){
@@ -1405,6 +1611,11 @@ function finishModal(answer){
   const s=m&&today&&today.stops.find(x=>x.id===m.id);
   if(!s){render();return}
   if(answer!=='none'){s.key=answer;s.keyAt=Date.now()}
+  const mx=ui.mx||{};ui.mx=null;
+  if(mx.strip!=null)s.cleaner=mx.strip?'strip':'done';
+  const ex=(mx.extras||[]).map(t=>t.replace(/^\S+\s/,'').trim()).concat(mx.other&&mx.other.trim()?[mx.other.trim()]:[]);
+  if(ex.length)s.extras=(s.extras||[]).concat(ex);
+  if(mx.code)applyCodeChange(s,mx.code);
   const T=stopTodos(s);
   if(T.length){
     s.todosDone=[];s.todosLeft=[];
@@ -1412,7 +1623,9 @@ function finishModal(answer){
     ui.todoChk={};save();
   }
   if(answer==='kept'){const a=getApt(s);keysHeld=keysHeld.filter(k=>k.id!==s.id);keysHeld.push({id:s.id,name:s.name,akey:a?norm(a.name):'',at:Date.now(),date:today.date})}
-  if(m.viber)sendViber(viberText(s));   // a gombnyomásban marad, így a megosztás menü megnyílhat
+  save();
+  const ph=ui.mxPhoto;ui.mxPhoto=null;
+  if(m.viber)sendViber(doneMessage(s),ph);   // a gombnyomásban marad, így a megosztás menü megnyílhat
   markDone(s.id);
   if(answer==='kept')toast('🔑 Felírtam: '+s.name+' kulcsa nálad van');
   else if(s.todosLeft&&s.todosLeft.length)toast('📝 Nyitva maradt: '+s.todosLeft.join(', ')+' – legközelebb is látod');
@@ -1455,15 +1668,23 @@ function modalHtml(){
   if(!ui.modal)return'';
   if(ui.modal.kind==='todo')return todoModal();
   if(ui.modal.kind==='meter')return meterModal();
+  if(ui.modal.kind==='appt')return apptModal();
   if(!today)return'';
   if(ui.modal.kind==='prob')return probModal();
   const s=today.stops.find(x=>x.id===ui.modal.id);if(!s)return'';
   const a=getApt(s),T=stopTodos(s),ask=cfg.keyAsk!=='0',chk=ui.todoChk||{};
   return`<div class="ov"><div class="modal">
-    <div class="mt">${T.length?'📝 Megcsináltad?':'🔑 Visszaraktad a kulcsot?'}</div>
+    <div class="mt">✔ Kész – mit jelentsünk?</div>
     <div class="small"><b>${esc(s.name)}</b></div>
-    ${T.length?`<div class="small">Pipáld ki, amit elintéztél – ami kimarad, legközelebb is itt lesz:</div>`+T.map(({a:x,t})=>`<button class="${chk[t.id]?'on':''}" style="justify-content:flex-start;text-align:left;font-size:16px;padding:12px" data-act="todoChk" data-tid="${t.id}">${chk[t.id]?'☑':'☐'} ${T.length&&stopApts(s).length>1?esc(x.name)+': ':''}${esc(t.text)}</button>`).join(''):''}
-    ${ask?`${T.length?'<div class="mt" style="font-size:18px;margin-top:6px">🔑 Visszaraktad a kulcsot?</div>':''}<div class="small">${a&&a.keySpot?`Helye: ${esc(a.keySpot)}`:''}${a&&a.code?`<br>Kulcsőr: <span class="mono">${esc(a.code)}</span>`:''}</div>
+    ${T.length?`<div class="small">📝 Teendők – pipáld ki, amit elintéztél (ami kimarad, legközelebb is itt lesz):</div>`+T.map(({a:x,t})=>`<button class="${chk[t.id]?'on':''}" style="justify-content:flex-start;text-align:left;font-size:16px;padding:12px" data-act="todoChk" data-tid="${t.id}">${chk[t.id]?'☑':'☐'} ${T.length&&stopApts(s).length>1?esc(x.name)+': ':''}${esc(t.text)}</button>`).join(''):''}
+    ${(()=>{const mx=ui.mx||{extras:[]};
+      return`<div class="lbl" style="margin-top:4px">🧺 Ágynemű</div><div class="chips"><button class="${!mx.strip?'on':''}" data-act="mxStrip" data-v="0">✅ A takarító lehúzta</button><button class="${mx.strip?'on':''}" data-act="mxStrip" data-v="1">🧺 Én húztam le</button></div>
+      <div class="lbl">➕ Mit csináltál még? (benne lesz az üzenetben)</div><div class="chips">${EXTRA_CHIPS.map(c=>`<button class="${mx.extras.includes(c)?'on':''}" data-act="mxExtra" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      <input id="mxOther" placeholder="Egyéb (pl. égőt cseréltem)" value="${esc(mx.other||'')}">
+      ${ui.modal.viber?`<div class="lbl">📷 Fotó az üzenethez (pl. az új kód a kulcsőrön)</div>${ui.mxPhoto?`<div class="row" style="margin-top:0"><span class="tag" style="align-self:center">📷 ${esc(ui.mxPhoto.name||'fotó')}</span><button data-act="mxPhotoDel">✕</button></div>`:`<label class="btn" style="width:100%">📷 Fotó készítése / választása<input type="file" id="mxPhoto" accept="image/*" capture="environment" style="display:none"></label>`}`:''}
+      <div class="lbl">🔑 Kulcsőr kódot átírtad?</div><input id="mxCode" inputmode="text" placeholder="Új kód – ha nem írtad át, hagyd üresen${a&&a.code?' (most: '+esc(a.code)+')':''}" value="${esc(mx.code||'')}">
+      ${ui.modal.viber?`<div class="lbl">💬 Az üzenet</div><div class="prev" id="mxPrev">${esc(doneMessage(s,{...mx,todosDone:T.filter(x=>chk[x.t.id]).map(x=>x.t.text),todosLeft:T.filter(x=>!chk[x.t.id]).map(x=>x.t.text)}))}</div>`:''}`})()}
+    ${ask?`<div class="mt" style="font-size:18px;margin-top:6px">🔑 Visszaraktad a kulcsot?</div><div class="small">${a&&a.keySpot?`Helye: ${esc(a.keySpot)}`:''}${a&&a.code?`<br>Kulcsőr: <span class="mono">${esc(a.code)}</span>`:''}</div>
     <button class="okb" data-act="keyBack">✅ Igen, visszaraktam</button>
     <button class="warnb" data-act="keyKept">🔑 Nem, nálam maradt</button>`:`<button class="okb" data-act="modalDone">✔ Kész</button>`}
     <button data-act="keyCancel">Mégse (még nem végeztem)</button>
@@ -1479,13 +1700,22 @@ function openViberLink(text){
   const enc=encodeURIComponent(text);
   location.href=/Android/i.test(navigator.userAgent)?`intent://forward?text=${enc}#Intent;scheme=viber;package=com.viber.voip;end`:`viber://forward?text=${enc}`;
 }
-function sendViber(text){
+function openMsgLink(text){
+  if(cfg.viberMode==='wa'){location.href='https://wa.me/?text='+encodeURIComponent(text);return}
+  openViberLink(text);
+}
+function sendViber(text,file){
   try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).catch(()=>{})}catch(e){}
-  if(cfg.viberMode!=='link'&&navigator.share){
-    navigator.share({text}).catch(e=>{if(!e||e.name!=='AbortError')openViberLink(text)});
+  if(file&&navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+    navigator.share({text,files:[file]}).catch(e=>{if(!e||e.name!=='AbortError')openMsgLink(text)});
     return;
   }
-  openViberLink(text);
+  if(file)toast('📷 A fotót ez a mód nem tudja csatolni – a szöveg a vágólapon is van');
+  if((cfg.viberMode||'share')==='share'&&navigator.share){
+    navigator.share({text}).catch(e=>{if(!e||e.name!=='AbortError')openMsgLink(text)});
+    return;
+  }
+  openMsgLink(text);
 }
 async function checkUpdate(silent){
   try{
@@ -1640,10 +1870,12 @@ document.addEventListener('click',e=>{
     window.L.marker([p.lat,p.lon],{icon:window.L.divIcon({className:'',html:'<div class="pin me"></div>',iconSize:null,iconAnchor:[9,9]})}).addTo(mapObj).bindPopup('Itt vagy');mapObj.setView([p.lat,p.lon],15)});return}
   if(act==='toggle'){ui.open=ui.open===d.id?null:d.id;ui.edit=null;render();return}
   if(act==='load'){
-    const{date,names,urgent}=parseMsg($('#paste').value);
+    const ptxt=$('#paste').value;
+    if(ptxt.trim()&&!looksLikeList(ptxt)&&!(ptxt.includes('\t'))){ui.paste='';processSharedText(ptxt);return}
+    const{date,names,urgent,info}=parseMsg(ptxt);
     if(!names.length){toast('Nem találtam lakásneveket');return}
     if(d.mode==='new'&&today&&!confirm('Van folyamatban lévő nap. Eldobod és újat kezdesz? (Lezárni a „Munka vége” gombbal tudod mentéssel.)'))return;
-    ui.paste='';loadDay(names,date,d.mode==='add',urgent);return;
+    ui.paste='';loadDay(names,date,d.mode==='add',urgent,info);return;
   }
   if(act==='start'){startShift();if(cfg.meterAsk!=='0'){ui.modal={kind:'meter',which:'start',date:today.date};render()}return}
   if(act==='end'){const dt=today.date;endShift();if(!today&&cfg.meterAsk!=='0'){ui.modal={kind:'meter',which:'end',date:dt};render()}return}
@@ -1665,6 +1897,12 @@ document.addEventListener('click',e=>{
   if(act==='doneViber'&&stop){askDone(stop,true);return}
   if(act==='keyBack'){finishModal('back');return}
   if(act==='modalDone'){finishModal('none');return}
+  if(act==='mxPhotoDel'){ui.mxPhoto=null;render();return}
+  if(act==='mxStrip'){ui.mx=ui.mx||{extras:[]};ui.mx.strip=d.v==='1';render();return}
+  if(act==='mxExtra'){ui.mx=ui.mx||{extras:[]};const i=ui.mx.extras.indexOf(d.v);if(i<0)ui.mx.extras.push(d.v);else ui.mx.extras.splice(i,1);render();return}
+  if(act==='codeChg'&&stop){const a=getApt(stop);if(!a){toast('Nincs lakás-adat');return}
+    const v=prompt(`Új kulcsőr kód – ${a.name}\n(most: ${a.code||'–'})`,'');if(v==null)return;
+    if(applyCodeChange(stop,v)){save();render();toast('🔑 Új kód elmentve: '+v.trim()+' – benne lesz a Kész-üzenetben')}else toast('Nem változott');return}
   if(act==='todoChk'){ui.todoChk=ui.todoChk||{};ui.todoChk[d.tid]=!ui.todoChk[d.tid];render();return}
   if(act==='strip'&&stop){stop.cleaner=stop.cleaner==='strip'?'done':'strip';stop.cleanerAt=Date.now();save();render();replan();return}
   if(act==='todoAdd'){const a=apts[d.key],inp=$('#todoIn-'+d.sid);if(a&&inp&&addTodo(a,inp.value)){render();toast('📝 Felírva: '+a.name)}return}
@@ -1683,6 +1921,25 @@ document.addEventListener('click',e=>{
   if(act==='meterSkip'){ui.modal=null;render();return}
   if(act==='homeSkip'){const x=dayByDate(d.date);if(x){x.homeSkip=true;save();render()}return}
   if(act==='csvDay'){exportDayCSV();return}
+  if(act==='dlNone'&&stop){if(stop.nobook){delete stop.nobook;Object.assign(stop,dlFor('',null,today.date))}else{stop.nobook=true;delete stop.dl}save();render();optimize();return}
+  if(act==='dlArrive'&&stop){if(stop.dl&&stop.dl.at){stop.dl.type=stop.dl.type==='arrive'?'done':'arrive';stop.dl.label=hhmm(stop.dl.at)+(stop.dl.type==='arrive'?'-ig érj oda':'');delete stop.dl.def;save();render();optimize()}else toast('Előbb adj meg egy időpontot');return}
+  if(act==='apptNew'){ui.modal={kind:'appt'};render();return}
+  if(act==='apptCancel'){ui.modal=null;render();return}
+  if(act==='apptSave'){
+    const nm=($('#apPlace')||{}).value||'',st=($('#apStart')||{}).value||'',du=+(($('#apDur')||{}).value)||60;
+    const tm=st.match(/^(\d{1,2}):(\d{2})$/);if(!nm.trim()||!tm){toast('Add meg a helyet és a kezdést');return}
+    let a=Object.values(apts).find(x=>x.name===nm.trim())||findApt(nm);
+    if(!a){const k=norm(nm);a=apts[k]={name:nm.trim(),address:'',note:'',apptMin:du,manual:{},aliases:[]}}
+    a.apptMin=du;cfg.lastAppt=a.name;cfg.lastApptStart=st;
+    const s={id:uid(),name:a.name,status:'pending',packs:0,cleaner:'done',appt:{start:atTime(today.date,+tm[1],+tm[2]),dur:du}};
+    const ei=today.stops.findIndex(x=>x.type==='depot'&&x.kind==='end'&&x.status!=='done');
+    today.stops.splice(ei<0?today.stops.length:ei,0,s);ui.modal=null;save();render();
+    toast(`📅 ${a.name} ${st} – a napot hozzá igazítom${a.address?'':' (add meg a címét!)'}`);optimize();return;
+  }
+  if(act==='clipMsg'){
+    (async()=>{try{const tx=await navigator.clipboard.readText();if(!tx||!tx.trim()){toast('A vágólap üres');return}processSharedText(tx)}
+      catch(e){toast('A vágólap nem olvasható – illeszd be a mezőbe (hosszú nyomás → Beillesztés)')}})();return;
+  }
   if(act==='undoBatch'&&today){
     const b=today.lastBatch,n=today.stops.filter(s=>s.batch===b&&s.status!=='done').length;
     if(!b||!n||!confirm(`Kiveszem az utoljára hozzáadott ${n} lakást a mai listából?`))return;
@@ -1713,7 +1970,7 @@ document.addEventListener('click',e=>{
     ui.open=stop.id;save();render();replan();toast(`🔗 ${n} lakás → 1 megálló · ${stop.packs} csomag`);return;
   }
   if(act==='split'&&stop){splitStop(stop);save();render();replan();toast('✂ Szétbontva, ennél a címnél nem von össze magától');return}
-  if(act==='viber'&&stop){sendViber(viberText(stop));return}
+  if(act==='viber'&&stop){sendViber(doneMessage(stop));return}
   if(act==='install'&&installEvt){installEvt.prompt();installEvt.userChoice.finally(()=>{installEvt=null;render()});return}
   if(act==='csv'){exportCSV();return}
   if(act==='mbTest'){
@@ -1788,6 +2045,12 @@ document.addEventListener('change',async e=>{
     else if(v)toast('Nincs ilyen nevű lakás a táblázatban');
     return;
   }
+  if(t.dataset.dl){const s=today&&today.stops.find(x=>x.id===t.dataset.dl);const m=t.value.match(/^(\d{1,2}):(\d{2})$/);
+    if(s&&m){const ty=s.dl&&s.dl.type==='arrive'?'arrive':'done';s.dl={at:atTime(today.date,+m[1],+m[2]),type:ty,label:t.value+(ty==='arrive'?'-ig érj oda':'')};delete s.nobook;save();render();optimize()}return}
+  if(t.dataset.apst||t.dataset.apdur){const s=today&&today.stops.find(x=>x.id===(t.dataset.apst||t.dataset.apdur));if(!s||!s.appt)return;
+    if(t.dataset.apst){const m=t.value.match(/^(\d{1,2}):(\d{2})$/);if(m)s.appt.start=atTime(today.date,+m[1],+m[2])}else s.appt.dur=Math.max(5,+t.value||60);
+    save();render();optimize();return}
+  if(t.id==='mxPhoto'&&t.files&&t.files[0]){ui.mxPhoto=t.files[0];render();return}
   if(t.dataset.vnote){const s=today&&today.stops.find(x=>x.id===t.dataset.vnote);if(s){s.vnote=t.value.trim();save()}return}
   if(t.dataset.cfg){const k=t.dataset.cfg;cfg[k]=t.dataset.num?(Number(t.value)||0):t.value.trim();save();return}
   if(t.id==='xl'&&t.files[0]){await importFile(t.files[0]);return}
@@ -1795,7 +2058,7 @@ document.addEventListener('change',async e=>{
     try{
       const j=JSON.parse(await t.files[0].text());
       if(!confirm('A mentés felülírja a mostani adatokat. Folytatod?'))return;
-      apts=j.apts||{};days=j.days||[];keysHeld=j.keysHeld||[];cfg=Object.assign({},DEF,cfg,j.cfg||{});if(j.today)today=j.today;ensureEnd();save();render();toast('Visszaállítva');
+      apts=j.apts||{};days=j.days||[];keysHeld=j.keysHeld||[];cfg=Object.assign({},DEF,cfg,j.cfg||{});if(cfg.template==='{név} Kész')cfg.template='{név} kész';if(j.today)today=j.today;ensureEnd();save();render();toast('Visszaállítva');
     }catch(err){toast('Hibás fájl')}
   }
 });
@@ -1803,6 +2066,9 @@ document.addEventListener('input',e=>{
   if(e.target.id==='q'){ui.q=e.target.value;$('#aptlist').innerHTML=aptListHtml()}
   if(e.target.id==='paste')ui.paste=e.target.value;
   if(e.target.id==='probTxt')ui.probText=e.target.value;
+  if(e.target.id==='mxOther'||e.target.id==='mxCode'){ui.mx=ui.mx||{extras:[]};ui.mx[e.target.id==='mxOther'?'other':'code']=e.target.value;
+    const pv=$('#mxPrev');if(pv&&ui.modal&&today){const s=today.stops.find(x=>x.id===ui.modal.id);const T=stopTodos(s),chk=ui.todoChk||{};
+      pv.textContent=doneMessage(s,{...ui.mx,todosDone:T.filter(x=>chk[x.t.id]).map(x=>x.t.text),todosLeft:T.filter(x=>!chk[x.t.id]).map(x=>x.t.text)})}}
 });
 async function handleShare(){
   const q=new URLSearchParams(location.search);
@@ -1822,10 +2088,11 @@ async function handleShare(){
 const SUFX=['','BA','BE','BAN','BEN','RA','RE','NAK','NEK','HOZ','HEZ','BOL','ROL','TOL','NAL','NEL','T','ON','EN','N','I','OS','ES'];
 function looksLikeList(text){
   if(/^\s*\d{4}\.\s?\d{2}\.\s?\d{2}/m.test(text))return true;
-  const L=String(text).split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('@'));
-  if(!L.length)return false;
-  const hit=L.filter(x=>{const n=x.replace(/[^\p{L}\p{N}\s.\-]/gu,'').trim();return n&&n.length<=24&&n.split(/\s+/).length<=3&&findApt(n)}).length;
-  return hit/L.length>=0.5;
+  const{names}=parseMsg(text);
+  if(!names.length)return false;
+  if(names.every(n=>n.length<=24&&n.split(/\s+/).length<=3))return true; // csupa rövid név → napi lista
+  const hit=names.filter(n=>n.length<=24&&n.split(/\s+/).length<=3&&findApt(n)).length;
+  return hit/names.length>=0.5;
 }
 // lakásnév keresése egy szabad szövegben: „Tok 1 …” → TÖK-1, „Bokrétába …” → BOK
 function detectApt(text){
@@ -1849,15 +2116,15 @@ function processSharedText(text){
     ui.modal={kind:'todo',apt:a?a.name:'',text:text.trim()};ui.tab='today';render();return;
   }
   if(text.includes('\t')&&text.split('\n').length>3){try{afterImport(importText(text),'Megosztott táblázat')}catch(e){toast('Nem sikerült: '+e.message)}return}
-  const{date,names,urgent}=parseMsg(text);
+  const{date,names,urgent,info}=parseMsg(text);
   ui.tab='today';
   if(!names.length){toast('A megosztott szövegben nem találtam lakásneveket');return}
-  if(!today){loadDay(names,date,false,urgent);return}
+  if(!today){loadDay(names,date,false,urgent,info);return}
   if(!date||date===today.date){
-    if(confirm(`${names.length} lakás érkezett. Hozzáadjam a mai listához?`)){loadDay(names,date,true,urgent);return}
+    if(confirm(`${names.length} lakás érkezett. Hozzáadjam a mai listához?`)){loadDay(names,date,true,urgent,info);return}
   }else if(confirm(`Új napi lista érkezett (${date}). A(z) ${today.date} napot lezárjam, és az újat kezdjem?`)){
     if(today.stops.some(s=>s.status==='done')){today.endedAt=today.endedAt||Date.now();days.unshift(today)}
-    today=null;save();loadDay(names,date,false,urgent);return;
+    today=null;save();loadDay(names,date,false,urgent,info);return;
   }
   ui.paste=text;render();toast('Az üzenet a beillesztő mezőbe került');
 }
