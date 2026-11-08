@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.15.1">
+<meta name="app-version" content="1.18.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -307,7 +307,26 @@ async function geocode(a){
   geoFail.set(a.address,Date.now());
   return false;
 }
+const pkKey=addr=>norm(addr||'');
+function parkOf(addr){const P=addr&&(cfg.parks||{})[pkKey(addr)];if(!P)return null;
+  if(P.manual)return{lat:P.manual.lat,lon:P.manual.lon,curb:true};
+  const L=P.logs||[];if(!L.length)return null;
+  let best=L[0],bs=1e9;L.forEach(a=>{const s=L.reduce((n,b)=>n+hav(a,b),0);if(s<bs){bs=s;best=a}}); // a legtöbbször használt hely (kilógó mérés nem számít)
+  return{lat:best.lat,lon:best.lon,curb:true};
+}
+function parkInfo(addr){const P=addr&&(cfg.parks||{})[pkKey(addr)];return!P?'':P.manual?'kézzel mentve':(P.logs||[]).length?`${P.logs.length} parkolásból tanulva`:''}
+function logPark(addr,p,ref){
+  if(!addr||!p||(p.acc||0)>35)return false;
+  if(ref&&ref.lat&&hav(ref,p)>0.45)return false; // messze parkolt (pl. nem volt hely) – nem tanulja meg
+  cfg.parks=cfg.parks||{};const k=pkKey(addr),P=cfg.parks[k]=cfg.parks[k]||{logs:[]};
+  const first=!P.manual&&!(P.logs||[]).length;
+  P.logs=[...(P.logs||[]),{lat:+p.lat.toFixed(6),lon:+p.lon.toFixed(6),at:Date.now()}].slice(-5);
+  return first;
+}
+// curb = a jármű menetirány szerinti oldalán érkezik / indul (ahol tényleg állni szoktál)
+const apr=pts=>pts.some(p=>p&&p.curb)?'&approaches='+pts.map(p=>p&&p.curb?'curb':'unrestricted').join(';'):'';
 async function depotPos(){
+  {const pk=parkOf(cfg.depotAddr);if(pk&&cfg.depotLat)return pk}
   if(cfg.depotLat&&cfg.depotGeo===cfg.depotAddr)return{lat:cfg.depotLat,lon:cfg.depotLon};
   const t={address:cfg.depotAddr};
   if(await geocode(t)){cfg.depotLat=t.lat;cfg.depotLon=t.lon;cfg.depotGeo=cfg.depotAddr;save();return{lat:t.lat,lon:t.lon}}
@@ -316,7 +335,7 @@ async function depotPos(){
 async function itemPos(s,D){
   if(s.type==='depot')return D;
   const a=getApt(s);
-  if(a&&a.address&&await geocode(a))return{lat:a.lat,lon:a.lon};
+  if(a&&a.address){const pk=parkOf(a.address);if(pk)return pk;if(await geocode(a))return{lat:a.lat,lon:a.lon}}
   return null;
 }
 function gps(){return new Promise(r=>{
@@ -344,7 +363,7 @@ async function mbMatrix(pts){
   for(let i=0;i<n;i+=B)for(let j=0;j<n;j+=B){
     const S=[],D=[];for(let k=i;k<Math.min(n,i+B);k++)S.push(k);for(let k=j;k<Math.min(n,j+B);k++)D.push(k);
     const U=[...new Set([...S,...D])];
-    const js=await mbGet(`${MB}/directions-matrix/v1/mapbox/driving-traffic/${U.map(k=>ll6(pts[k])).join(';')}?sources=${S.map(k=>U.indexOf(k)).join(';')}&destinations=${D.map(k=>U.indexOf(k)).join(';')}&annotations=duration`);
+    const js=await mbGet(`${MB}/directions-matrix/v1/mapbox/driving-traffic/${U.map(k=>ll6(pts[k])).join(';')}?sources=${S.map(k=>U.indexOf(k)).join(';')}&destinations=${D.map(k=>U.indexOf(k)).join(';')}&annotations=duration${apr(U.map(k=>pts[k]))}`);
     mbUse('el',S.length*D.length);
     S.forEach((si,a)=>D.forEach((dj,b)=>{d[si][dj]=si===dj?0:js.durations[a][b]}));
   }
@@ -352,7 +371,7 @@ async function mbMatrix(pts){
   return d;
 }
 async function osrmMatrix(pts){
-  const r=await fetch(`https://router.project-osrm.org/table/v1/driving/${pts.map(p=>p.lon+','+p.lat).join(';')}?annotations=duration`);
+  const r=await fetch(`https://router.project-osrm.org/table/v1/driving/${pts.map(p=>p.lon+','+p.lat).join(';')}?annotations=duration${apr(pts)}`);
   const j=await r.json();
   if(j.code==='Ok'&&j.durations&&!j.durations.flat().includes(null))return j.durations;
   throw new Error('osrm');
@@ -369,7 +388,7 @@ async function legsOf(wp,opt){ // wp: legalább 2 pont → [{km,min,approx,src}]
       const out=[];
       for(let s=0;s<wp.length-1;s+=24){
         const part=wp.slice(s,s+25);
-        const j=await mbGet(`${MB}/directions/v5/mapbox/driving-traffic/${part.map(ll6).join(';')}?overview=false`);
+        const j=await mbGet(`${MB}/directions/v5/mapbox/driving-traffic/${part.map(ll6).join(';')}?overview=false${apr(part)}`);
         mbUse('rq',1);
         const L=j.routes&&j.routes[0]&&j.routes[0].legs;
         if(!L||L.length!==part.length-1)throw new Error('hiányos útvonal');
@@ -380,30 +399,54 @@ async function legsOf(wp,opt){ // wp: legalább 2 pont → [{km,min,approx,src}]
   }
   try{
     const c=wp.map(p=>p.lon+','+p.lat).join(';');
-    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${c}?overview=false`);
+    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${c}?overview=false${apr(wp)}`);
     const j=await r.json();
     if(j.code==='Ok'&&j.routes&&j.routes[0]&&j.routes[0].legs.length===wp.length-1)
       return j.routes[0].legs.map(l=>({km:l.distance/1000,min:l.duration/60,approx:false,src:'osrm'}));
   }catch(e){}
   return wp.slice(1).map((p,i)=>{const k=hav(wp[i],p)*1.3;return{km:k,min:k/30*60,approx:true,src:'becslés'}});
 }
+const timedCache=new Map();
+const futOn=()=>useTraffic()&&cfg.futTraffic!=='0'&&((LS.get('mbUse',{}).m!==new Date().toISOString().slice(0,7))||(LS.get('mbUse',{}).rq||0)<8500);
+async function timedLeg(a,b,T){
+  const hb=Math.floor(T/36e5),key=ll6(a)+(a.curb?'c':'')+';'+ll6(b)+(b.curb?'c':'')+'@'+hb;
+  if(timedCache.has(key))return timedCache.get(key);
+  const dt=new Date(hb*36e5+18e5),ds=`${dt.getFullYear()}-${pad2(dt.getMonth()+1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+  const j=await mbGet(`${MB}/directions/v5/mapbox/driving-traffic/${ll6(a)};${ll6(b)}?overview=false&depart_at=${encodeURIComponent(ds)}${apr([a,b])}`);
+  mbUse('rq',1);
+  const L=j.routes&&j.routes[0]&&j.routes[0].legs&&j.routes[0].legs[0];if(!L)throw new Error('nincs út');
+  const v={km:L.distance/1000,min:L.duration/60};timedCache.set(key,v);return v;
+}
+async function pool(arr,n,fn){for(let i=0;i<arr.length;i+=n)await Promise.all(arr.slice(i,i+n).map(fn))}
+// a terv óránkénti forgalmi szorzói a jövőbeli/élő arányból (a sorrend újraszámolásához)
+function hfFromPlan(){
+  if(!today)return null;const by={};
+  today.stops.forEach(s=>{if(s.status!=='done'&&s.planTimed&&s.planLive>=2&&s.planDep)(by[new Date(s.planDep).getHours()]=by[new Date(s.planDep).getHours()]||[]).push(s.planMin/s.planLive)});
+  const hs=Object.keys(by).map(Number);if(!hs.length)return null;
+  const f={};hs.forEach(x=>f[x]=median(by[x]));
+  if(hs.every(x=>Math.abs(f[x]-1)<0.08))return null;
+  const now=Date.now();
+  return T=>{if(T-now<30*6e4)return 1;const hh=new Date(T).getHours();if(f[hh]!=null)return f[hh];
+    let b=null;hs.forEach(x=>{if(b==null||Math.abs(x-hh)<Math.abs(b-hh))b=x});return f[b]};
+}
 async function legKm(from,to){const L=await legsOf([from,to],{noTraffic:true});return{km:L[0].km,approx:L[0].approx}}
 /* Határidők + időpontok: 1) semmi ne késsen (késés-perc ×1000), 2) sürgősek minél előbb (×10), 3) lejárt határidejűek minél előbb (×0,1),
    azon belül a legrövidebb nap. ≤14 megállóig dinamikus programozás (Pareto-front), fölötte többszörös helyi keresés. */
-function timeOrder(d,src,sIdx,ok,off){
-  const n=ok.length,now=Date.now();
-  const S=ok.map(s=>({svc:svcMs(s)/6e4,dl:s.dl&&s.dl.at?(s.dl.at-now)/6e4:null,arrive:!!(s.dl&&s.dl.type==='arrive'),ap:s.appt?(s.appt.start-now)/6e4:null,urg:!!s.urgent,s}));
+function timeOrder(d,src,sIdx,ok,off,HF){
+  const n=ok.length,now=planNow();
+  const hf=HF?(t=>HF(now+t*6e4)):src!=='traffic'?(t=>learnH(now+t*6e4)):(()=>1);
+  const S=ok.map(s=>({af:afterOf(s)!=null?(afterOf(s)-now)/6e4:null,svc:svcMs(s)/6e4,dl:s.dl&&s.dl.at?(s.dl.at-now)/6e4:null,arrive:!!(s.dl&&s.dl.type==='arrive'),ap:s.appt?(s.appt.start-now)/6e4:null,urg:!!s.urgent,s}));
   S.forEach(x=>{const lim=x.ap??x.dl;x.w=lim!=null&&lim<=0?0.1:1000}); // tartható határidő ≈ kötelező; már lejárt: csak „minél előbb”
-  const tt=(i,k)=>{const p=d[i][k+off]/60;return predDrive(p,src,S[k].s,p<0.75)};
-  const back=i=>predDrive(d[i][0]/60,src,{type:'depot',kind:'end'},false);
+  const tt=(i,k,t)=>{const p=d[i][k+off]/60;return predDrive(p*hf(t),src,S[k].s,p<0.75)};
+  const back=(i,t)=>predDrive(d[i][0]/60*hf(t),src,{type:'depot',kind:'end'},false);
   const step=(t,pen,i,k)=>{
-    const x=S[k],arr=t+tt(i,k);let fin;
+    const x=S[k];let arr=t+tt(i,k,t),fin;if(x.af!=null&&arr<x.af)arr=x.af; // korábban nem mehet be: vár
     if(x.ap!=null){fin=Math.max(arr,x.ap)+x.svc;pen+=Math.max(0,arr-x.ap)*x.w}
     else{fin=arr+x.svc;if(x.dl!=null)pen+=Math.max(0,(x.arrive?arr:fin)-x.dl)*x.w}
     if(x.urg)pen+=Math.max(0,arr)*10; // sürgős: a határidők után a legfontosabb
     return[fin,pen];
   };
-  const evalO=o=>{let t=0,pen=0,i=sIdx;for(const k of o){[t,pen]=step(t,pen,i,k);i=k+off}return{p:pen,t:t+back(i)}};
+  const evalO=o=>{let t=0,pen=0,i=sIdx;for(const k of o){[t,pen]=step(t,pen,i,k);i=k+off}return{p:pen,t:t+back(i,t)}};
   const better=(a,b)=>a.p<b.p-1e-6||(Math.abs(a.p-b.p)<=1e-6&&a.t<b.t-1e-6);
   let best=null,bo=null;
   const consider=o=>{const v=evalO(o);if(!best||better(v,best)){best=v;bo=o.slice()}};
@@ -415,7 +458,7 @@ function timeOrder(d,src,sIdx,ok,off){
       for(let k=0;k<n;k++){if(m&(1<<k))continue;const idx=(m|(1<<k))*n+k;
         for(let e=0;e<fr.length;e++){const[t,p]=step(fr[e].t,fr[e].p,j+off,k);ins(idx,{p,t,pj:j,pi:e})}}}
     let bj=-1,be=-1,bv=null;
-    for(let j=0;j<n;j++){const fr=front[(F-1)*n+j];if(!fr)continue;fr.forEach((x,e)=>{const v={p:x.p,t:x.t+back(j+off)};if(!bv||better(v,bv)){bv=v;bj=j;be=e}})}
+    for(let j=0;j<n;j++){const fr=front[(F-1)*n+j];if(!fr)continue;fr.forEach((x,e)=>{const v={p:x.p,t:x.t+back(j+off,x.t)};if(!bv||better(v,bv)){bv=v;bj=j;be=e}})}
     const o=[];let m=F-1,j=bj,e=be;while(j>=0){o.push(j);const x=front[m*n+j][e];m&=~(1<<j);j=x.pj;e=x.pi}
     consider(o.reverse());
   }else{
@@ -516,7 +559,7 @@ function model(){
       else{const k=stopKey(s),c=s.cleaner==='strip'?'strip':'done';(on[k]=on[k]||{done:[],strip:[],x:[],all:[]});on[k][c].push(m);on[k].all.push(m);if(!s.members)onAll[c].push(m)}
     }
     if(s.sameBldg||v.drive==null||v.planDrive==null||v.planDrive<3e4||v.drive>90*6e4)continue;
-    legs[s.legPlanSrc==='traffic'?'traffic':'osrm'].push({p:v.planDrive/6e4,a:v.drive/6e4,k:s.type==='depot'?'DEPOT':stopKey(s)});
+    legs[s.legPlanSrc==='traffic'?'traffic':'osrm'].push({p:v.planDrive/6e4,a:v.drive/6e4,k:s.type==='depot'?'DEPOT':stopKey(s),h:new Date(s.legStartAt).getHours()});
   }
   const fit=L=>{
     if(L.length<3)return null;
@@ -531,10 +574,15 @@ function model(){
   for(const src of['traffic','osrm']){const f=F[src];if(!f)continue;
     const by={};for(const x of legs[src])(by[x.k]=by[x.k]||[]).push(x.a-(f.k*x.p+f.c));
     for(const[k,r]of Object.entries(by))if(r.length>=2){const e=median(r)*r.length/(r.length+2);extra[k]=Math.max(-5,Math.min(15,e))}}
+  // napszak: az OSRM forgalom nélkül számol, a tanult szorzó átlagos – óránként mennyivel lassabb/gyorsabb a valóság
+  const H={};{const f=F.osrm;if(f){const by={};for(const x of legs.osrm)if(x.p>=2&&x.h>=0)(by[x.h]=by[x.h]||[]).push(x.a/Math.max(1,f.k*x.p+f.c));
+    for(const[hh,r]of Object.entries(by))if(r.length>=2){const m=median(r),w=r.length/(r.length+4);H[hh]={f:Math.max(0.7,Math.min(1.8,1+(m-1)*w)),n:r.length}}}}
   const g={done:median(onAll.done),strip:median(onAll.strip),x:median(onAll.x)};
-  return modelCache={F,manual,extra,on,g,dep:{reload:median(dep.reload),end:median(dep.end)},nOn:onAll.done.length+onAll.strip.length+onAll.x.length},modelSig=sig,modelCache;
+  return modelCache={F,manual,extra,H,on,g,dep:{reload:median(dep.reload),end:median(dep.end)},nOn:onAll.done.length+onAll.strip.length+onAll.x.length},modelSig=sig,modelCache;
 }
 // előrejelzett út (perc) egy tervezett vezetési időből
+function afterOf(s){if(!today||s.type==='depot'||s.appt)return null;const a=getApt(s),m=a&&String(a.notBefore||'').match(/^(\d{1,2}):(\d{2})$/);return m?atTime(today.date,+m[1],+m[2]):null}
+function learnH(T){const M=model(),x=M.H&&M.H[new Date(T).getHours()];return x?x.f:1}
 function predDrive(plan,src,s,sameB){
   const M=model();
   if(sameB)return plan;
@@ -580,9 +628,9 @@ async function optimize(){
   const lastDone=doneItems[doneItems.length-1];
   const cur=lastDone&&lastDone.type!=='depot'&&lastDone.pos?lastDone.pos:null;
   let used=0;for(let k=doneItems.length-1;k>=0&&doneItems[k].type!=='depot';k--)used+=doneItems[k].packs||1;
-  let rounds=[[]];
+  let rounds=[[]],TO=null;
   if(ok.length){
-    const pts=[D,...(cur?[cur]:[]),...ok.map(getApt)];
+    const pts=[D,...(cur?[cur]:[]),...ok.map(s=>{const a=getApt(s);return parkOf(a.address)||a})];
     const off=cur?2:1,sIdx=cur?1:0;
     const{d,src}=await matrix(pts);today.optSrc=src;
     const nodeOf=new Map(ok.map((s,k)=>[s,k+off]));
@@ -597,6 +645,7 @@ async function optimize(){
     const totalPacks=ok.reduce((t,s)=>t+(s.packs||1),0)+(cur?used:0);
     if(!reloads&&!(cfg.cap>0&&totalPacks>cfg.cap)){
       const r=timeOrder(d,src,sIdx,ok,off);rounds=[r.order];   // határidők, időpontok, sürgősek figyelembevételével
+      TO={d,src,sIdx,ok,off,order:r.order};
     }else{
       const list=ordered(sIdx,ok.map((_,k)=>k+off)).map(x=>ok[x-off]);
       const chunks=splitRounds(list,cur?used:0,cfg.cap,reloads+1);
@@ -605,19 +654,25 @@ async function optimize(){
   }
   if(!today)return;
   const endItem=today.stops.find(s=>s.type==='depot'&&s.kind==='end'&&s.status!=='done')||mkDepot('end');
-  const stops=[...doneItems];
-  rounds.forEach((c,k)=>{if(k>0)stops.push(mkDepot('reload'));stops.push(...c)});
-  stops.push(...bad,endItem);
-  stops.forEach(s=>{if(s.status!=='done'){delete s.legPlanMin;delete s.legPlanKm;delete s.legPlanEta;delete s.svcPlanMin}});
-  today.stops=stops;today.planAt=0;save();
+  const build=rounds=>{const stops=[...doneItems];
+    rounds.forEach((c,k)=>{if(k>0)stops.push(mkDepot('reload'));stops.push(...c)});
+    stops.push(...bad,endItem);
+    stops.forEach(s=>{if(s.status!=='done'){delete s.legPlanMin;delete s.legPlanKm;delete s.legPlanEta;delete s.svcPlanMin}});
+    today.stops=stops;today.planAt=0;save()};
+  build(rounds);
   await replan();
+  // jövőbeli forgalom: ha a nap későbbi szakaszai lassabbak/gyorsabbak, a sorrendet ezzel újraszámolja
+  if(TO&&today&&TO.src==='traffic'){const HF=hfFromPlan();
+    if(HF){toast('Sorrend újraszámolása a várható forgalommal…',1);const r=timeOrder(TO.d,TO.src,TO.sIdx,TO.ok,TO.off,HF);
+      if(r.order.some((s,i)=>s!==TO.order[i])){build([r.order]);await replan()}}}
   const nR=today.stops.filter(s=>s.type==='depot').length;
   const mins=today.endEta?Math.round((today.endEta-Date.now())/60000):null;
-  toast(`Kész · ${nR} kör${today.remKm?` · ~${Math.round(today.remKm)} km`:''}${mins!=null?` · ~${mins} perc`:''}${today.optSrc==='traffic'?' · 🚦 élő forgalommal':useTraffic()?' · ⚠ forgalmi adat nem jött ('+trafficErr+'), forgalom nélkül':today.planApprox?' (becslés)':''}${bad.length?` · ⚠ ${bad.length} lakásnak nincs/nem található címe`:''}`);
+  toast(`Kész · ${nR} kör${today.remKm?` · ~${Math.round(today.remKm)} km`:''}${mins!=null?` · ~${mins} perc`:''}${today.optSrc==='traffic'?(today.timedN?' · 🚦 élő + várható forgalommal':' · 🚦 élő forgalommal'):useTraffic()?' · ⚠ forgalmi adat nem jött ('+trafficErr+'), forgalom nélkül':today.planApprox?' (becslés)':''}${bad.length?` · ⚠ ${bad.length} lakásnak nincs/nem található címe`:''}`);
 }
 
 /* ===== ütemezés: tervezett érkezések, hátralévő út ===== */
 let planning=false,again=false;
+function planNow(){const n=Date.now();return today&&!today.startedAt&&today.planStart&&today.planStart>n?today.planStart:n}
 async function replan(){
   if(!today)return;
   if(planning){again=true;return}
@@ -640,10 +695,21 @@ async function doPlan(){
   }
   if(!items.length){today.remKm=0;today.endEta=null;return}
   const legs=await legsOf(wp);if(!today)return;
-  let t=Date.now(),km=0,ap=false,aptDone=null;
+  today.timedN=0;
+  if(futOn()&&legs.length&&legs[0].src==='traffic'){
+    let t=planNow();const need=[];
+    items.forEach((s,i)=>{const L=legs[i],dep=t;t+=predDrive(L.min,L.src,s,L.km<0.05)*6e4;if(s.appt)t=Math.max(t,s.appt.start);t+=svcMs(s);
+      if(dep-Date.now()>30*6e4&&L.km>=0.05)need.push([i,dep])});
+    await pool(need,6,async([i,dep])=>{try{const v=await timedLeg(wp[i],wp[i+1],dep);legs[i].live=legs[i].min;legs[i].min=v.min;legs[i].dep=dep;legs[i].timed=true}catch(e){}});
+    if(!today)return;
+  }
+  let t=planNow(),km=0,ap=false,aptDone=null;
   items.forEach((s,i)=>{const L=legs[i];km+=L.km;ap=ap||L.approx;s.planKm=L.km;s.planMin=L.min;s.planSrc=L.src;
-    s.planPred=predDrive(L.min,L.src,s,L.km<0.05);t+=s.planPred*6e4;s.eta=t;
-    if(s.appt){s.wait=Math.max(0,s.appt.start-t);t=Math.max(t,s.appt.start)}else delete s.wait;
+    if(L.timed){s.planTimed=true;s.planLive=L.live;s.planDep=L.dep;today.timedN++}else{delete s.planTimed;delete s.planLive;delete s.planDep}
+    const hf=L.src!=='traffic'&&L.km>=0.05?learnH(t):1;s.planHf=hf;
+    s.planPred=predDrive(L.min*hf,L.src,s,L.km<0.05);t+=s.planPred*6e4;s.eta=t;
+    const af=afterOf(s);
+    if(s.appt){s.wait=Math.max(0,s.appt.start-t);t=Math.max(t,s.appt.start)}else if(af&&t<af){s.wait=af-t;t=af}else delete s.wait;
     t+=svcMs(s);s.etaDone=t;if(s.type!=='depot'&&!s.appt)aptDone=t;
     s.late=s.appt?s.eta>s.appt.start+6e4:!!(s.dl&&s.dl.at&&(s.dl.type==='arrive'?s.eta:s.etaDone)>s.dl.at+6e4)});
   today.remKm=km;today.planApprox=ap;today.planSrc=legs[0]&&legs[0].src;today.aptDoneEta=aptDone;
@@ -699,6 +765,7 @@ function newDay(names,date,append,urgent,info){
     today.stops.splice(ei<0?today.stops.length:ei,0,...fresh);
   }else{
     today={date:date||ld(),startedAt:null,endedAt:null,startPoint:null,stops};
+    {const m=(cfg.startTime||'').match(/^(\d{1,2}):(\d{2})$/);if(m)today.planStart=atTime(today.date,+m[1],+m[2])}
     if(info&&info.__datefix)today.dateNote=`Az üzenet dátuma (${info.__datefix.replace(/-/g,'.')}.) nem mai volt – a mai napra vettem.`;
     {const mp=LS.get('meterPending',null);if(mp&&Date.now()-mp.at<16*3.6e6){today.meter={home0:mp};today.prices=curPrices()}LS.set('meterPending',null)}
   }
@@ -1077,6 +1144,7 @@ function dataStatus(){
 /* ===== nézetek ===== */
 function wazeUrl(a){
   if(!a||!a.address)return null;
+  {const pk=parkOf(a.address)||(a.geoManual&&a.lat?a:null);if(pk)return`https://waze.com/ul?ll=${(+pk.lat).toFixed(6)},${(+pk.lon).toFixed(6)}&navigate=yes`}
   const p=parseAddr(a.address);
   // Wazének egyszerű házszám: „31-33a” → 31 (a tartományt / betűt nem mindig érti)
   const n=/[-–]/.test(p.num)?(p.num.match(/\d+/)||[''])[0]:p.num;
@@ -1131,7 +1199,9 @@ function aptDetail(a){
     const p=parseAddr(a.address),k=norm(a.name);
     const st=a.geoManual?'📍 kézzel mentett pont':a.lat&&a.geoOk&&a.geoPrecise&&a.geoV===GEO_V?`✅ pontos házszám${p.roman?' ('+p.roman+'. ker.)':''}`:a.lat&&a.geoOk&&a.geoV===GEO_V?'<span class="warn">⚠ csak az utca ismert – a bejáratnál nyomd meg: 📍 A bejárat itt van</span>':a.geoV===GEO_V&&!a.lat?'<span class="warn">⚠ a térképen nem található – a Waze szövegesen keres</span>':'⏳ még nincs ellenőrizve';
     h+=`<div class="lbl">Navigáció</div><div class="small">${esc(p.street?p.full:a.address)} · ${st}</div>
-    <div class="row">${a.lat?`<a class="btn flex1" href="https://www.google.com/maps/search/?api=1&query=${a.lat},${a.lon}" target="_blank" rel="noopener">🗺 Pont a térképen</a>`:''}<button class="flex1" data-act="hereGps" data-key="${esc(k)}">📍 A bejárat itt van</button></div>`;
+    <div class="row">${a.lat?`<a class="btn flex1" href="https://www.google.com/maps/search/?api=1&query=${a.lat},${a.lon}" target="_blank" rel="noopener">🗺 Pont a térképen</a>`:''}<button class="flex1" data-act="hereGps" data-key="${esc(k)}">📍 A bejárat itt van</button></div>
+    <div class="lbl">🅿 Parkolás${parkInfo(a.address)?` <span class="bdg">${parkInfo(a.address)}</span>`:''}</div>${parkInfo(a.address)?'<div class="small">A Waze és a tervezés a parkolóhelyre visz, arról az útoldalról.</div>':'<div class="small mut">Még nincs mentve – a „🅿 Leparkoltam” gombnál magától megtanulja.</div>'}
+    <div class="row"><button class="flex1" data-act="parkHere" data-addr="${esc(a.address)}">🅿 Itt parkolok (mentés)</button>${parkInfo(a.address)?`<button data-act="parkDel" data-addr="${esc(a.address)}">✕</button>`:''}</div>`;
   }
   if(a.helpUrl&&/^https?:\/\//i.test(a.helpUrl))h+=`<div class="row"><a class="btn flex1" href="${esc(a.helpUrl)}" target="_blank" rel="noopener">📄 Bejutási segédlet megnyitása</a></div>`;
   if(a.help)h+=`<div class="lbl">Bejutási segédlet</div><div class="pre">${esc(a.help)}</div>`;
@@ -1169,6 +1239,10 @@ function depotCard(s){
 }
 function dlBadge(s,done){
   if(s.appt)return'';
+  {const a=getApt(s);if(a&&a.notBefore&&!done){const b=dlBadge0(s,done);return`<span class="dlb">⏳ ${esc(a.notBefore)} után</span>`+(b?' '+b:'')}}
+  return dlBadge0(s,done);
+}
+function dlBadge0(s,done){
   if(s.nobook)return`<span class="dlb free">🔓 bármikor</span>`;
   if(s.dl&&s.dl.at)return`<span class="dlb ${!done&&s.late?'late':''}">⏰ ${s.dl.type==='arrive'?'':'kész: '}${esc(s.dl.label)}${s.dl.def?' (alap)':''}</span>`;
   return'';
@@ -1177,7 +1251,9 @@ function dlEditor(s){
   return`<div class="lbl">⏰ Határidő${s.info?` <span class="mut" style="text-transform:none">(üzenetben: ${esc(s.info)})</span>`:''}</div>
   <div class="row" style="margin-top:0"><input type="time" data-dl="${s.id}" value="${s.dl&&s.dl.at?hhmm(s.dl.at):''}" style="flex:1;margin:0">
   <button class="${s.dl&&s.dl.type==='arrive'?'on':''}" data-act="dlArrive" data-id="${s.id}">🚪 odaérni</button>
-  <button class="${s.nobook?'on':''}" data-act="dlNone" data-id="${s.id}">🔓 bármikor</button></div>`;
+  <button class="${s.nobook?'on':''}" data-act="dlNone" data-id="${s.id}">🔓 bármikor</button></div>
+  ${(()=>{const a=getApt(s);return a?`<div class="lbl">⏳ Legkorábban mehetsz <span class="mut" style="text-transform:none">(minden nap, pl. „csak 12 után”)</span></div>
+  <div class="row" style="margin-top:0"><input type="time" data-after="${s.id}" value="${esc(a.notBefore||'')}" style="flex:1;margin:0">${a.notBefore?`<button data-act="afterDel" data-id="${s.id}">✕</button>`:''}</div>`:''})()}`;
 }
 function apptCard(s){
   const a=getApt(s),open=ui.open===s.id,done=s.status==='done',st=s.appt.start,en=st+(s.appt.dur||60)*6e4,url=a?wazeUrl(a):null;
@@ -1291,6 +1367,8 @@ function viewToday(){
   ${T('Megtett út',st.km?(st.approx?'~':'')+fmtKm(st.km):'–')}
   ${T('Eltelt idő',today.startedAt?hm(st.ms):'–','clock')}
   </div>`;
+  {const sv=today.startedAt||today.planStart,v=sv?fmtT(sv):'';
+  h+=`<div class="row" style="margin:0 0 10px;align-items:center"><span style="flex:1">${today.startedAt?'▶ Kezdés ideje (javítható):':'🕘 Tervezett kezdés:'}</span><input type="time" data-start="1" value="${v}" style="padding:8px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit">${!today.startedAt&&today.planStart?'<button data-act="planStartDel" title="Most indulok">✕</button>':''}</div>`;}
   h+=`<div class="row" style="margin:0 0 10px">${!today.startedAt?'<button class="okb flex1" data-act="start">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end">⏹ Munka vége</button>'}
   <button class="pri flex1" data-act="optimize">🧭 Útvonal újratervezése</button></div>`+`<div class="row" style="margin:0 0 10px"><button class="flex1" data-act="apptNew">📅 + Időpontos program (pl. Barlai)</button></div>`+deadlineLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
   const pend=stops.filter(s=>s.status!=='done');
@@ -1344,6 +1422,7 @@ function learnedCard(){
   const line=(x,lab)=>x&&L.push(`🚗 ${lab}: út a parkolásig ≈ ${x.k!==1?ps(x.k)+' × ':''}terv + ${Math.round(x.c)} p <span class="mut">(${x.n} útból${x.mae!=null?', átl. hiba ±'+Math.round(x.mae)+' p':''})</span>`);
   line(f,'Forgalmi tervvel');line(o,'Forgalom nélküli tervvel');
   if(!f&&!o)L.push('🚗 Utak: még kevés adat (3 út kell) – addig +5 p parkolással számol');
+  {const H=M.H||{},ks=Object.keys(H).map(Number).sort((a,b)=>a-b).filter(x=>Math.abs(H[x].f-1)>=0.05);if(ks.length)L.push('🕔 Napszak (forgalom nélküli tervhez): '+ks.map(x=>`${x}h ×${ps(H[x].f)}`).join(' · '))}
   if(M.manual)L.push(`<span class="warn">Kézi parkolási idő van beállítva (${esc(cfg.parkMin)} p) – a tanult útmodell nincs használatban</span>`);
   const g=M.g;
   L.push(`⏱ Parkolástól készig (sétával együtt): ${g.done!=null?'takarító kész '+Math.round(g.done)+' p · ':''}${g.strip!=null?'lehúzással '+Math.round(g.strip)+' p · ':''}${g.done==null&&g.strip==null&&g.x==null?'még nincs adat':''}`);
@@ -1418,6 +1497,7 @@ function viewSet(){
   const num=(k,l)=>`<div class="lbl">${l}</div><input data-cfg="${k}" data-num="1" type="number" inputmode="numeric" min="0" value="${esc(cfg[k])}">`;
   return`<h2>Beállítások</h2><div class="card pad">
   <div class="lbl" style="margin-top:0">Raktár / mosoda címe (felvétel és szennyes leadás)</div><input data-cfg="depotAddr" value="${esc(cfg.depotAddr)}">
+  <div class="row"><button class="flex1" data-act="parkHere" data-addr="${esc(cfg.depotAddr)}">🅿 A raktárnál itt parkolok (mentés)</button>${parkInfo(cfg.depotAddr)?`<button data-act="parkDel" data-addr="${esc(cfg.depotAddr)}">✕</button>`:''}</div>${parkInfo(cfg.depotAddr)?`<div class="small">🅿 Raktár parkolóhely: ${parkInfo(cfg.depotAddr)}</div>`:''}
   ${num('cap','Autó kapacitása (csomag / kör, 0 = nincs korlát)')}
   ${num('stopMin','Várakozás lakásonként (perc)')}
   ${num('stripMin','Extra idő, ha nekem kell lehúzni (perc)')}
@@ -1439,6 +1519,8 @@ function viewSet(){
   <input data-cfg="mbToken" value="${esc(cfg.mbToken||'')}" placeholder="pk.… hozzáférési token" autocomplete="off">
   <select data-cfg="useTraffic" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:6px">
     <option value="1" ${cfg.useTraffic!=='0'?'selected':''}>Forgalom figyelése: be</option><option value="0" ${cfg.useTraffic==='0'?'selected':''}>Forgalom figyelése: ki</option></select>
+  <select data-cfg="futTraffic" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:6px">
+    <option value="1" ${cfg.futTraffic!=='0'?'selected':''}>Későbbi szakaszok: várható forgalommal (pl. délutáni csúcs)</option><option value="0" ${cfg.futTraffic==='0'?'selected':''}>Későbbi szakaszok: a mostani forgalommal</option></select>
   <div class="row"><button class="flex1" data-act="mbTest">🚦 Kapcsolat teszt</button></div>
   <div class="mut small" style="margin-top:6px">Ingyenes regisztráció kártya nélkül: mapbox.com → Sign up → Account → <b>Default public token</b> (pk.-val kezdődik), ide másold. Kártya nélkül havonta 10 000 mátrix-elem és 10 000 útvonal-kérés ingyenes. ${(()=>{const u=LS.get('mbUse',{});return u.m===new Date().toISOString().slice(0,7)?`Ebben a hónapban: ${u.el||0} elem, ${u.rq||0} kérés.`:''})()} A token csak ezen a telefonon tárolódik, a GitHubra nem kerül fel.</div>
   <div class="mut small" style="margin-top:4px">Üresen hagyva a naplódból tanulja: mennyivel tart tovább az út a parkolásig a tisztán vezetett időnél (forgalom, parkolóhely-keresés). A séta a lakásig a lakásonkénti helyszíni időben van. A tervezett érkezésekhez adja hozzá.</div>
@@ -1446,6 +1528,7 @@ function viewSet(){
     <option value="share" ${(cfg.viberMode||'share')==='share'?'selected':''}>Megosztás menü (ajánlott) – WhatsApp vagy Viber → csoport</option>
     <option value="wa" ${cfg.viberMode==='wa'?'selected':''}>Közvetlenül WhatsApp</option>
     <option value="link" ${cfg.viberMode==='link'?'selected':''}>Közvetlenül Viber</option></select>
+  <div class="lbl">Szokásos kezdés (új napnál ebből tervez; üresen: a mostani időből)</div><input type="time" data-cfg="startTime" value="${esc(cfg.startTime||'')}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
   <div class="lbl">Üzenet formája</div><select data-cfg="msgStyle" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;margin-top:4px">
     <option value="short" ${(cfg.msgStyle||'short')==='short'?'selected':''}>Rövid, egy sorban – „VÍG-1 kész, lehúztam, WC-papír pótolva”</option>
     <option value="long" ${cfg.msgStyle==='long'?'selected':''}>Részletes, soronként, emojikkal</option></select>
@@ -1764,9 +1847,9 @@ function loadLeaflet(){
   return leafP;
 }
 function stopPos(s){
-  if(s.type==='depot')return cfg.depotLat?{lat:cfg.depotLat,lon:cfg.depotLon}:null;
+  if(s.type==='depot')return cfg.depotLat?(parkOf(cfg.depotAddr)||{lat:cfg.depotLat,lon:cfg.depotLon}):null;
   if(s.status==='done'&&s.pos)return s.pos;
-  const a=getApt(s);return a&&a.lat?{lat:a.lat,lon:a.lon}:null;
+  const a=getApt(s);return a&&a.lat?(parkOf(a.address)||{lat:a.lat,lon:a.lon}):null;
 }
 // a megállók térképi sorrendje: kész (időrendben), majd a hátralévők a lista sorrendjében
 function mapSeq(){
@@ -1778,11 +1861,11 @@ function mapSeq(){
 }
 async function routeGeom(pts){
   if(pts.length<2)return null;
-  const key=pts.map(p=>p.lat.toFixed(5)+','+p.lon.toFixed(5)).join(';');
+  const key=pts.map(p=>p.lat.toFixed(5)+','+p.lon.toFixed(5)+(p.curb?'c':'')).join(';');
   if(geomCache.has(key))return geomCache.get(key);
   let g=null;
   try{
-    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${pts.map(p=>p.lon+','+p.lat).join(';')}?overview=full&geometries=geojson`);
+    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${pts.map(p=>p.lon+','+p.lat).join(';')}?overview=full&geometries=geojson${apr(pts)}`);
     const j=await r.json();
     if(j.code==='Ok'&&j.routes&&j.routes[0])g=j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
   }catch(e){}
@@ -1808,7 +1891,7 @@ async function initMap(){
   if(mapObj){try{mapObj.remove()}catch(e){}mapObj=null}
   const L=window.L,map=L.map(el,{zoomControl:true,attributionControl:true});mapObj=map;
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
-  const{done,pend}=mapSeq(),all=ui.mapAll!==false,D=cfg.depotLat?{lat:cfg.depotLat,lon:cfg.depotLon}:null;
+  const{done,pend}=mapSeq(),all=ui.mapAll!==false,D=cfg.depotLat?(parkOf(cfg.depotAddr)||{lat:cfg.depotLat,lon:cfg.depotLon}):null;
   const icon=(cls,txt)=>L.divIcon({className:'',html:`<div class="pin ${cls}">${txt}</div>`,iconSize:null,iconAnchor:[cls.includes('next')?18:14,cls.includes('next')?18:14],popupAnchor:[0,-14]});
   const bounds=[];
   // csoportosítás azonos pontra (egy ház több lakása)
@@ -1890,13 +1973,24 @@ document.addEventListener('click',e=>{
       }catch(e){toast('Vágólap nem olvasható ('+e.message+') – illeszd be kézzel a mezőbe (hosszú nyomás → Beillesztés)')}
     })();return;
   }
-  if(act==='arrive'&&stop){stop.arrivedAt=Date.now();ui.open=stop.id;save();render();return}
+  if(act==='arrive'&&stop){stop.arrivedAt=Date.now();ui.open=stop.id;save();render();
+    if(cfg.parkLearn!=='0'){const dep=stop.type==='depot',a=dep?null:getApt(stop),addr=dep?cfg.depotAddr:a&&a.address,ref=dep?(cfg.depotLat?{lat:cfg.depotLat,lon:cfg.depotLon}:null):a;
+      if(addr)gps().then(p=>{if(logPark(addr,p,ref)){save();toast('🅿 Parkolóhely megjegyezve – legközelebb a Waze és a tervezés ide visz, erről az oldalról')}else if(p)save()})}
+    return}
+  if(act==='parkHere'){const addr=d.addr;if(!addr)return;
+    if(!confirm('Az autónál állsz, ott, ahol ennél a címnél parkolni szoktál? Elmentem: a Waze és az útvonaltervezés mostantól ide visz, erről az útoldalról.'))return;
+    toast('Helymeghatározás…',1);
+    gps().then(p=>{if(!p){toast('Nem sikerült a GPS – engedélyezd a helyhozzáférést');return}
+      if(p.acc>60){toast(`⚠ Pontatlan a GPS (±${Math.round(p.acc)} m) – próbáld újra szabad ég alatt`);return}
+      cfg.parks=cfg.parks||{};const k=pkKey(addr);cfg.parks[k]={...(cfg.parks[k]||{}),manual:{lat:+p.lat.toFixed(6),lon:+p.lon.toFixed(6),at:Date.now()}};save();render();replan();toast('🅿 Parkolóhely mentve')});return}
+  if(act==='parkDel'){const k=pkKey(d.addr);if(cfg.parks&&cfg.parks[k]&&confirm('Törlöd a mentett parkolóhelyet? Utána újra a címre navigál, és a következő parkolásaidból tanul.')){delete cfg.parks[k];save();render();replan()}return}
   if(act==='cleaner'&&stop){stop.cleaner=stop.cleaner===d.v?null:d.v;stop.cleanerAt=stop.cleaner?Date.now():null;save();render();replan();return}
   if(act==='packs'&&stop){stop.packs=Math.max(1,(stop.packs||1)+(+d.d));save();render();return}
   if(act==='done'&&stop){askDone(stop,false);return}
   if(act==='doneViber'&&stop){askDone(stop,true);return}
   if(act==='keyBack'){finishModal('back');return}
   if(act==='modalDone'){finishModal('none');return}
+  if(act==='planStartDel'){if(today){delete today.planStart;save();render();optimize()}return}
   if(act==='mxPhotoDel'){ui.mxPhoto=null;render();return}
   if(act==='mxStrip'){ui.mx=ui.mx||{extras:[]};ui.mx.strip=d.v==='1';render();return}
   if(act==='mxExtra'){ui.mx=ui.mx||{extras:[]};const i=ui.mx.extras.indexOf(d.v);if(i<0)ui.mx.extras.push(d.v);else ui.mx.extras.splice(i,1);render();return}
@@ -1921,6 +2015,7 @@ document.addEventListener('click',e=>{
   if(act==='meterSkip'){ui.modal=null;render();return}
   if(act==='homeSkip'){const x=dayByDate(d.date);if(x){x.homeSkip=true;save();render()}return}
   if(act==='csvDay'){exportDayCSV();return}
+  if(act==='afterDel'&&stop){const a=getApt(stop);if(a){delete a.notBefore;save();render();optimize()}return}
   if(act==='dlNone'&&stop){if(stop.nobook){delete stop.nobook;Object.assign(stop,dlFor('',null,today.date))}else{stop.nobook=true;delete stop.dl}save();render();optimize();return}
   if(act==='dlArrive'&&stop){if(stop.dl&&stop.dl.at){stop.dl.type=stop.dl.type==='arrive'?'done':'arrive';stop.dl.label=hhmm(stop.dl.at)+(stop.dl.type==='arrive'?'-ig érj oda':'');delete stop.dl.def;save();render();optimize()}else toast('Előbb adj meg egy időpontot');return}
   if(act==='apptNew'){ui.modal={kind:'appt'};render();return}
@@ -2045,11 +2140,17 @@ document.addEventListener('change',async e=>{
     else if(v)toast('Nincs ilyen nevű lakás a táblázatban');
     return;
   }
+  if(t.dataset.after){const s=today&&today.stops.find(x=>x.id===t.dataset.after),a=s&&getApt(s);if(a&&/^\d{1,2}:\d{2}$/.test(t.value)){a.notBefore=t.value;save();render();optimize();toast(`⏳ ${a.name}: ${t.value} előtt nem tervez oda`)}return}
   if(t.dataset.dl){const s=today&&today.stops.find(x=>x.id===t.dataset.dl);const m=t.value.match(/^(\d{1,2}):(\d{2})$/);
     if(s&&m){const ty=s.dl&&s.dl.type==='arrive'?'arrive':'done';s.dl={at:atTime(today.date,+m[1],+m[2]),type:ty,label:t.value+(ty==='arrive'?'-ig érj oda':'')};delete s.nobook;save();render();optimize()}return}
   if(t.dataset.apst||t.dataset.apdur){const s=today&&today.stops.find(x=>x.id===(t.dataset.apst||t.dataset.apdur));if(!s||!s.appt)return;
     if(t.dataset.apst){const m=t.value.match(/^(\d{1,2}):(\d{2})$/);if(m)s.appt.start=atTime(today.date,+m[1],+m[2])}else s.appt.dur=Math.max(5,+t.value||60);
     save();render();optimize();return}
+  if(t.dataset.start&&today){const m=t.value.match(/^(\d{1,2}):(\d{2})$/);if(!m)return;const at=atTime(today.date,+m[1],+m[2]);
+    if(today.startedAt){if(at>Date.now()){toast('A kezdés nem lehet a jövőben');render();return}
+      const old=today.startedAt;today.startedAt=at;today.stops.forEach(s=>{if(s.legStartAt===old)s.legStartAt=at});save();render();toast('▶ Kezdés: '+fmtT(at))}
+    else{today.planStart=at;save();render();optimize();toast(at>Date.now()?'🕘 A tervet '+fmtT(at)+'-s indulással számolom':'A megadott idő már elmúlt – a mostani időből tervezek')}
+    return}
   if(t.id==='mxPhoto'&&t.files&&t.files[0]){ui.mxPhoto=t.files[0];render();return}
   if(t.dataset.vnote){const s=today&&today.stops.find(x=>x.id===t.dataset.vnote);if(s){s.vnote=t.value.trim();save()}return}
   if(t.dataset.cfg){const k=t.dataset.cfg;cfg[k]=t.dataset.num?(Number(t.value)||0):t.value.trim();save();return}
