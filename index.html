@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.22.2">
+<meta name="app-version" content="1.22.5">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -102,7 +102,8 @@ h2{font-size:18px;margin:6px 2px 10px}
 .dlb.late{background:var(--bad);color:#fff}.dlb.free{background:color-mix(in srgb,var(--ok) 16%,var(--card));color:var(--ok)}.dlb.appt{background:#8b5cf6;color:#fff}
 .dlrow{padding:2px 12px 0;display:flex;gap:6px;flex-wrap:wrap}
 .prev{white-space:pre-wrap;font-size:13px;background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;max-height:150px;overflow:auto}
-.modal{max-height:92vh;overflow:auto}
+.modal{max-height:92vh;max-height:92dvh;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.modal>*{flex-shrink:0} /* különben a hosszú ablakban az elemek (pl. az üzenet) összenyomódnak */
 </style>
 </head>
 <body>
@@ -941,17 +942,18 @@ function histSummary(t){
   if(dOn.length)L.push(`🏭 Raktárban: ${fmtDur(sum(dOn,x=>x.v.onsite))}`);
   const kmA=sum(dn,s=>s.legKm),bk=dn.filter(s=>s.legKm!=null&&s.legPlanKm!=null);
   if(kmA)L.push(`📏 ${fmtKm(kmA)}`+(bk.length?` · terv/tény az összehasonlítható utaknál: ${fmtKm(sum(bk,s=>s.legPlanKm))} / ${fmtKm(sum(bk,s=>s.legKm))}`:''));
-  const ms=(t.endedAt||Math.max(...dn.map(s=>s.doneAt),0))-(t.startedAt||0);
+  const ds=dayStats(t),ms=(t.endedAt||Math.max(...dn.map(s=>s.doneAt),0))-(t.startedAt||0)-ds.apMs;
+  if(ds.apMs&&t.startedAt)L.push(`🕐 Futár-munka: ${fmtDur(ms)} · 📅 időpontos program: ${fmtDur(ds.apMs)} (nem számít bele)`);
   if(t.startedAt&&apt.length&&ms>5*6e4)L.push(`⚡ ${(apt.length/(ms/3.6e6)).toFixed(1).replace('.',',')} lakás / óra`);
   return`<div class="small" style="line-height:1.7;padding-top:8px">${L.join('<br>')}</div>`;
 }
 function exportDayCSV(){
-  const H=['Dátum','Kezdés','Vége','Ledolgozott (perc)','Lakások','Lehúzás','Munka km','Munka kWh','Munka L','Munka Ft','Ingázás km','Ingázás kWh','Ingázás L','Ingázás Ft','Autó összesen Ft','Áram Ft/kWh','Benzin Ft/L','Km-óra indulás otthon','Km-óra munka kezdete','Km-óra munka vége','Km-óra haza'];
+  const H=['Dátum','Kezdés','Vége','Ledolgozott (perc, időpontos program nélkül)','Időpontos program (perc)','Lakások','Lehúzás','Munka km','Munka kWh','Munka L','Munka Ft','Ingázás km','Ingázás kWh','Ingázás L','Ingázás Ft','Autó összesen Ft','Áram Ft/kWh','Benzin Ft/L','Km-óra indulás otthon','Km-óra munka kezdete','Km-óra munka vége','Km-óra haza'];
   const k=x=>x==null?'':String(Math.round(x*100)/100).replace('.',',');
   const rows=[H];
   for(const d of [...days].sort((a,b)=>a.date<b.date?-1:1)){
-    const st=dayStats(d),F=dayFuel(d)||{},w=F.work||{},c=F.comm||{},m=d.meter||{},ap=d.stops.filter(s=>s.type!=='depot'&&s.status==='done');
-    rows.push([d.date,d.startedAt?fmtT(d.startedAt):'',d.endedAt?fmtT(d.endedAt):'',Math.round(st.ms/6e4),ap.reduce((n,s)=>n+(s.members?s.members.length:1),0),ap.filter(s=>s.cleaner==='strip').length,
+    const st=dayStats(d),F=dayFuel(d)||{},w=F.work||{},c=F.comm||{},m=d.meter||{},ap=d.stops.filter(s=>s.type!=='depot'&&!s.appt&&s.status==='done');
+    rows.push([d.date,d.startedAt?fmtT(d.startedAt):'',d.endedAt?fmtT(d.endedAt):'',Math.round(st.work/6e4),st.apMs?Math.round(st.apMs/6e4):'',ap.reduce((n,s)=>n+(s.members?s.members.length:1),0),ap.filter(s=>s.cleaner==='strip').length,
       k(w.km),k(w.kwh),k(w.l),F.wc!=null?Math.round(F.wc):'',k(c.km),k(c.kwh),k(c.l),F.cc!=null?Math.round(F.cc):'',F.wc!=null||F.cc!=null?Math.round((F.wc||0)+(F.cc||0)):'',
       F.p?k(F.p.kwh):'',F.p?k(F.p.l):'',...['home0','start','end','home1'].map(x=>m[x]&&m[x].km!=null?m[x].km:'')]);
   }
@@ -1001,8 +1003,10 @@ function deadlineLine(){
 function dayStats(t){
   const apt=t.stops.filter(s=>s.type!=='depot'&&!s.appt),done=apt.filter(s=>s.status==='done');
   const dn=t.stops.filter(s=>s.status==='done');
-  const end=t.endedAt||Date.now();
-  return{done:done.length,total:apt.length,km:dn.reduce((a,s)=>a+(s.legKm||0),0),approx:dn.some(s=>s.approx),ms:t.startedAt?end-t.startedAt:0};
+  const end=t.endedAt||Date.now(),ms=t.startedAt?end-t.startedAt:0;
+  // időpontos program (pl. Barlai): külön munka, a futár-munkaidőből levonja (érkezéstől befejezésig; ha nincs naplózva, a megadott időtartam)
+  const apMs=t.stops.filter(s=>s.appt&&s.status==='done').reduce((a,s)=>a+(s.arrivedAt&&s.doneAt&&s.doneAt>s.arrivedAt?s.doneAt-s.arrivedAt:(s.appt.dur||60)*6e4),0);
+  return{done:done.length,total:apt.length,km:dn.reduce((a,s)=>a+(s.legKm||0),0),approx:dn.some(s=>s.approx),ms,apMs,work:Math.max(0,ms-apMs)};
 }
 
 /* ===== Excel / CSV import + napi adatbázis-frissítés ===== */
@@ -1437,7 +1441,7 @@ function stopCard(s){
     h+=`<div class="sec"><div class="row" style="margin-top:0"><button class="sm flex1" data-act="prob" data-id="${s.id}" style="border-color:var(--warn);color:var(--warn)">⚠ Probléma</button><button class="sm flex1" data-act="codeChg" data-id="${s.id}">🔑 Kódot átírtam</button></div>`;
     (s.codeChanges||(s.codeChange?[s.codeChange]:[])).forEach(c=>{h+=`<div class="small">🔑 Kód átírva${s.members&&c.name?' ('+esc(c.name)+')':''}: <s>${esc(c.from)}</s> → <b>${esc(c.to)}</b></div>`});
     h+=(s.problems||[]).map(p=>`<div class="issue small"><b>⚠ ${esc(p.type)}</b> · ${fmtT(p.at)}${p.text?'<br>'+esc(p.text):''}</div>`).join('');
-    h+=`<div class="row">${done?`<button class="sm flex1" data-act="undo" data-id="${s.id}">↩ Visszavon</button><button class="sm" data-act="done" data-id="${s.id}" style="display:none"></button>`:`<button class="sm" data-act="move" data-id="${s.id}" data-d="-1">▲</button><button class="sm" data-act="move" data-id="${s.id}" data-d="1">▼</button><button class="sm flex1" data-act="reloadAfter" data-id="${s.id}">🔄 Újratöltés utána</button>`}<button class="sm" data-act="edit" data-id="${s.id}">✏️</button><button class="sm bad" data-act="del" data-id="${s.id}">✕</button></div>`;
+    h+=`<div class="row">${done?`<button class="sm flex1" data-act="undo" data-id="${s.id}">↩ Visszavon</button><button class="sm" data-act="done" data-id="${s.id}" style="display:none"></button>`:`<button class="sm" data-act="move" data-id="${s.id}" data-d="-1">▲</button><button class="sm" data-act="move" data-id="${s.id}" data-d="1">▼</button><button class="sm flex1" data-act="reloadAfter" data-id="${s.id}">🔄 Újratöltés utána</button><button class="sm" data-act="skipStop" data-id="${s.id}" title="Ma kimarad">🚫</button>`}<button class="sm" data-act="edit" data-id="${s.id}">✏️</button><button class="sm bad" data-act="del" data-id="${s.id}">✕</button></div>`;
     {const mi=aptMisc(a);if(mi)h+=ui.miscOpen===s.id?`<div class="lbl">Egyéb adatok</div>${mi}<div class="row"><button class="sm" data-act="miscOpen" data-id="">▲ Elrejt</button></div>`:`<div class="row"><button class="sm flex1" data-act="miscOpen" data-id="${s.id}" style="opacity:.7">ℹ️ Egyéb adatok (wifi, tulaj, pótkulcsőr…)</button></div>`}
     h+='</div>';
     h+='</div>';
@@ -1479,7 +1483,7 @@ function viewToday(){
   {const sv=today.startedAt||today.planStart,v=sv?fmtT(sv):'';
   h+=`<div class="row" style="margin:0 0 10px;align-items:center"><span style="flex:1">${today.startedAt?'▶ Kezdés ideje (javítható):':'🕘 Tervezett kezdés:'}</span><input type="time" data-start="1" value="${v}" style="padding:8px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit">${!today.startedAt&&today.planStart?'<button data-act="planStartDel" title="Most indulok">✕</button>':''}</div>`;}
   h+=`<div class="row" style="margin:0 0 10px">${!today.startedAt?'<button class="okb flex1" data-act="start">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end">⏹ Munka vége</button>'}
-  <button class="pri flex1" data-act="optimize">🧭 Útvonal újratervezése</button></div>`+`<div class="row" style="margin:0 0 10px">${today.stops.some(s=>s.status!=='done'&&s.type!=='depot')?`<button class="flex1" data-act="loadOpen">🧺 Bepakolás</button>`:''}${today.startedAt?`<button class="flex1" data-act="outNow">🏭 Kifogytam</button>`:''}<button class="flex1" data-act="apptNew">📅 + Időpontos program</button></div>`+deadlineLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
+  <button class="pri flex1" data-act="optimize">🧭 Útvonal újratervezése</button></div>`+`<div class="row" style="margin:0 0 10px">${today.stops.some(s=>s.status!=='done'&&s.type!=='depot')?`<button class="flex1" data-act="loadOpen">🧺 Bepakolás</button>`:''}${today.startedAt?`<button class="flex1" data-act="outNow">🏭 Kifogytam</button>`:''}<button class="flex1" data-act="apptNew">📅 + Időpontos program</button></div>`+deadlineLine()+skippedLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
   const pend=stops.filter(s=>s.status!=='done');
   const doneL=stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt);
   let r=doneL.filter(s=>s.type==='depot').length+1,startRound=true;
@@ -1550,7 +1554,7 @@ function monthCard(){
   const D=days.filter(d=>String(d.date).startsWith(m));
   let ms_=0,km=0,apt=0,packs=0,strip=0,cl=0,keys=0,probs=0,urg=0,onDl=0,dlN=0,starts=[],ends=[];
   for(const d of D){
-    const st=dayStats(d);ms_+=st.ms;km+=st.km;
+    const st=dayStats(d);ms_+=st.work;km+=st.km;
     if(d.startedAt)starts.push(new Date(d.startedAt).getHours()*60+new Date(d.startedAt).getMinutes());
     if(d.endedAt)ends.push(new Date(d.endedAt).getHours()*60+new Date(d.endedAt).getMinutes());
     let last=0;
@@ -1799,6 +1803,7 @@ function loadList(atId){
   for(;i<pend.length;i++){const s=pend[i];if(s.type==='depot'){if(s.pickupFor)continue;break}if(!s.viaDepot)items.push(s)}
   return{items,pickup:false};
 }
+function skippedLine(){const K=today&&today.skipped||[];return K.length?`<div class="dl">🚫 Ma kimarad: ${K.map(s=>`<b>${esc(s.name)}</b>${s.skipReason?' ('+esc(s.skipReason)+')':''} <a href="#" data-act="unskip" data-id="${s.id}">↩ vissza</a>`).join(', ')}</div>`:''}
 function loadModal(){
   const m=ui.modal,pend=today.stops.filter(s=>s.status!=='done'&&s.type!=='depot');
   const tot=pend.reduce((n,s)=>n+(s.packs||1),0),cap=+cfg.cap||0;
@@ -1809,7 +1814,7 @@ function loadModal(){
   const row=(s,k)=>{const a=getApt(s);return`<div class="row" style="margin-top:4px;align-items:center">
     <button class="flex1 sm ${s.loaded?'on':''}" data-act="loadTog" data-id="${s.id}" style="text-align:left;justify-content:flex-start;padding:10px 8px!important">${s.loaded?'✅':'⬜'} <b>${k+1}.</b>&nbsp;${esc(s.name)}${s.members?` <span class="mut small">(${s.members.length})</span>`:''}</button>
     <button class="sm" data-act="packs" data-id="${s.id}" data-d="-1" style="padding:10px 10px!important">−</button><b style="min-width:22px;text-align:center">${s.packs||1}</b><button class="sm" data-act="packs" data-id="${s.id}" data-d="1" style="padding:10px 10px!important">+</button>
-    ${L.pickup?'':`<button data-act="loadNR" data-id="${s.id}" title="A mosás még nincs kész">⏳</button>`}</div>`};
+    ${L.pickup?'':`<button class="sm" data-act="loadNR" data-id="${s.id}" title="A mosás még nincs kész – később hozod" style="padding:10px 8px!important">⏳</button><button class="sm" data-act="skipStop" data-id="${s.id}" title="Ma nem megy (nincs hozzá tiszta)" style="padding:10px 8px!important">🚫</button>`}</div>`};
   return`<div class="ov"><div class="modal">
     <div class="mt">🧺 Bepakolás${L.pickup?' – mosodai felvétel':''}</div>
     ${L.pickup?'':`<div class="small">Ma még <b>${tot} táska</b> · ${pend.length} megálló → <b>${nR} kör</b></div>
@@ -1818,7 +1823,7 @@ function loadModal(){
     <div class="lbl">Pakolás sorrendje <span class="mut" style="text-transform:none">– az 1. kerüljön leghátra · a szám = táska</span></div>
     ${load.length?load.map(row).join(''):'<div class="small mut">Ebben a körben nincs mit bepakolni.</div>'}
     <div class="small" style="margin-top:6px">${inN===allN&&allN?'✅':'📦'} Bent: <b>${inN}/${allN}</b> táska${!L.pickup&&nR>1?' · a többi a következő körben':''}</div>
-    <div class="small mut">⏳ = ennél a lakásnál nincs kész a mosás → később visszajössz érte, a terv ehhez igazodik. Ha egy lakásba csak később lehet menni: nyisd le a kártyáját → ⏰ Határidő → „⏳ Legkorábban mehetsz”.</div>
+    ${skippedLine()}<div class="small mut">⏳ = még mosódik → később visszajössz érte. 🚫 = ma nincs hozzá tiszta → kimarad a mai tervből (visszavehető). Ha egy lakásba csak később lehet menni: nyisd le a kártyáját → ⏰ Határidő → „⏳ Legkorábban mehetsz”.</div>
     <div class="row"><button class="flex1" data-act="loadPlan">🧭 Újratervezés</button><button class="okb flex1" data-act="loadClose">Kész</button></div>
   </div></div>`;
 }
@@ -2092,8 +2097,10 @@ async function initMap(){
 }
 function render(){
   if(ui.tab!=='map'&&mapObj){try{mapObj.remove()}catch(e){}mapObj=null}
+  const om=document.querySelector('#app .modal'),mk=ui.modal&&ui.modal.kind,msc=om&&mk===render._mk?om.scrollTop:0;
   $('#app').innerHTML=modalHtml()+banners()+(ui.tab==='today'?viewToday():ui.tab==='map'?viewMap():ui.tab==='apts'?viewApts():ui.tab==='hist'?viewHist():viewSet());
   if(ui.tab==='map')initMap();
+  {const nm=document.querySelector('#app .modal');if(nm&&msc)nm.scrollTop=msc;render._mk=mk}
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===ui.tab));
 }
 setInterval(()=>{
@@ -2224,6 +2231,13 @@ document.addEventListener('click',e=>{
     rl.pinned=true;today.stops.splice(first<0?today.stops.length:first,0,rl);
     {const lp=today.stops.filter(s=>s.status!=='done'&&s.arrivedAt&&s.type!=='depot').sort((a,b)=>b.arrivedAt-a.arrivedAt)[0];if(lp)delete lp.arrivedAt}
     save();render();optimize();return}
+  if(act==='skipStop'&&stop){e.preventDefault&&e.preventDefault();
+    const why=prompt(stop.name+' – ma kimarad a tervből. Miért?','nincs hozzá tiszta');if(why===null)return;
+    today.stops.splice(today.stops.indexOf(stop),1);(today.skipped=today.skipped||[]).push({...stop,skipReason:why,skipAt:Date.now(),loaded:false});
+    if(ui.open===stop.id)ui.open=null;save();render();toast('🚫 '+stop.name+' ma kimarad – újratervezés…');optimize();return}
+  if(act==='unskip'){e.preventDefault&&e.preventDefault();const K=today.skipped||[],i=K.findIndex(x=>x.id===d.id);if(i<0)return;
+    const [s]=K.splice(i,1);delete s.skipReason;delete s.skipAt;const end=today.stops.findIndex(x=>x.type==='depot'&&x.kind==='end'&&x.status!=='done');
+    today.stops.splice(end<0?today.stops.length:end,0,s);save();render();toast('↩ '+s.name+' visszakerült – újratervezés…');optimize();return}
   if(act==='loadOpen'){ui.modal={kind:'load',at:d.at||null};render();return}
   if(act==='loadClose'){ui.modal=null;render();return}
   if(act==='loadPlan'){ui.modal=null;render();optimize();return}
