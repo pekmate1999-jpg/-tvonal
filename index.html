@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.22.1">
+<meta name="app-version" content="1.22.2">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -367,6 +367,7 @@ async function mbMatrix(pts){
   for(let i=0;i<n;i+=B)for(let j=0;j<n;j+=B){
     const S=[],D=[];for(let k=i;k<Math.min(n,i+B);k++)S.push(k);for(let k=j;k<Math.min(n,j+B);k++)D.push(k);
     const U=[...new Set([...S,...D])];
+    if(U.length<2){S.forEach(si=>D.forEach(dj=>{d[si][dj]=0}));continue} // egyetlen pont önmagához: 0 (a Mapbox legalább 2 pontot kér)
     const base=`${MB}/directions-matrix/v1/mapbox/driving-traffic/${U.map(k=>ll6(pts[k])).join(';')}?sources=${S.map(k=>U.indexOf(k)).join(';')}&destinations=${D.map(k=>U.indexOf(k)).join(';')}&annotations=duration`;
     const ap=apr(U.map(k=>pts[k]));let js;
     if(ap&&!mbMatrix.noApr){try{js=await mbGet(base+ap);if(js.durations.flat().some(x=>x==null))js=null}catch(e){mbMatrix.noApr=true;mxErr='útoldal-paraméter: '+e.message}}
