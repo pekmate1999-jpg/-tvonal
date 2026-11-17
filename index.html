@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.28.0">
+<meta name="app-version" content="1.29.0">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -44,8 +44,8 @@ nav button.on{outline:0;color:var(--ac);background:none}
 #toast{position:fixed;left:12px;right:12px;bottom:90px;background:#111827;color:#fff;padding:12px 14px;border-radius:12px;display:none;z-index:9;max-width:616px;margin:0 auto;text-align:center}
 h2{font-size:18px;margin:6px 2px 10px}
 .tag{font-size:12px;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--bd)}
-.top{background:var(--hd);color:#fff;padding:12px 14px;border-radius:14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px}
-.top .ttl{font-size:22px;font-weight:800}.top .sub{font-size:12px;opacity:.9}
+.top{background:var(--hd);color:#fff;padding:8px 12px;border-radius:14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.top .ttl{font-size:18px;font-weight:800}.top .sub{font-size:12px;opacity:.9}
 .pill{background:rgba(0,0,0,.25);border-radius:14px;padding:4px 10px;text-align:center;font-weight:700;font-size:13px;line-height:1.2;flex:none}
 .pill span{display:block;font-weight:500;font-size:11px}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);background:var(--card);border:1px solid var(--bd);border-radius:14px;overflow:hidden;margin-bottom:10px}
@@ -1256,7 +1256,7 @@ function wazeUrl(a){
 const depotObj=()=>({address:cfg.depotAddr,lat:cfg.depotLat,lon:cfg.depotLon,geoOk:true,geoPrecise:true,geoV:GEO_V});
 function topBar(){
   const ds=dataStatus();
-  return`<div class="top"><div><div class="ttl">Megbízások</div><div class="sub">🏭 ${esc(cfg.depotAddr)}${today?' · '+esc(today.date):''}</div></div>
+  return`<div class="top"><div><div class="ttl">Megbízások</div><div class="sub">${today?'📅 '+esc(today.date):'🏭 '+esc(cfg.depotAddr)}</div></div>
   <div class="pill">v${esc(APP_VERSION)}<span>${ds.ok?'🗄 adat: ma':'⚠ adat nem mai'}</span></div></div>`;
 }
 function pasteBox(has){
@@ -1515,7 +1515,7 @@ function remainingStops(){
 }
 function viewToday(){
   let h=topBar();
-  const homeBtn=cfg.meterAsk!=='0'&&!(today&&(today.startedAt||(today.meter&&today.meter.home0)))&&!(!today&&LS.get('meterPending',null)&&Date.now()-LS.get('meterPending',{}).at<16*3.6e6)?`<div class="row" style="margin:0 0 10px"><button class="flex1" data-act="meterOpen" data-which="home0" data-date="${today?esc(today.date):''}">🏠 Indulok otthonról – ⛽ óraállás</button></div>`:'';
+  const homeBtn=cfg.meterAsk!=='0'&&!(today&&(today.startedAt||(today.meter&&today.meter.home0)))&&!(!today&&LS.get('meterPending',null)&&Date.now()-LS.get('meterPending',{}).at<16*3.6e6)?`<div class="row" style="margin:0 0 8px"><button class="flex1 sm" data-act="meterOpen" data-which="home0" data-date="${today?esc(today.date):''}">🏠 Indulok otthonról · ⛽ óraállás</button></div>`:'';
   if(!today)return h+homeBtn+pasteBox(false);
   h+=homeBtn;
   const stops=today.stops,apt=stops.filter(s=>s.type!=='depot'&&!s.appt),dep=stops.filter(s=>s.type==='depot');
@@ -1527,23 +1527,21 @@ function viewToday(){
   ${T(today.startedAt?'Hátralévő idő':'Túra hossza',remTxt(),'rem')}
   ${T('🏁 Végzés',today.endEta?fmtT(today.endDone||today.endEta)+`<div class="small mut" style="font-weight:400">raktárba: ${fmtT(today.endEta)}</div>`:'–')}
   ${T('Következő lakásra'+(today.planSrc==='traffic'?' 🚦':''),nxt&&nxt.planMin!=null?Math.round(nxt.planPred??nxt.planMin)+' p':'–')}
-  ${T('Fennmaradó lakások',apt.filter(s=>s.status!=='done').reduce((n,s)=>n+(s.members?s.members.length:1),0))}
-  ${T('Fennmaradó megállók',remainingStops())}
-  ${T('Megtett út',st.km?(st.approx?'~':'')+fmtKm(st.km):'–')}
-  ${T('Eltelt idő',today.startedAt?hm(st.ms):'–','clock')}
-  </div>`;
+  </div><div class="small mut" style="text-align:center;margin:-4px 0 8px">🏠 ${apt.filter(s=>s.status!=='done').reduce((n,s)=>n+(s.members?s.members.length:1),0)} lakás · ${remainingStops()} megálló hátra${today.startedAt?` · 🚗 ${st.km?(st.approx?'~':'')+fmtKm(st.km):'0 km'} megtéve · ⏱ <span id="clock">${hm(st.ms)}</span> eltelt`:''}</div>`;
   {const sv=today.startedAt||today.planStart,v=sv?fmtT(sv):'';
-  h+=`<div class="row" style="margin:0 0 10px;align-items:center"><span style="flex:1">${today.startedAt?'▶ Kezdés ideje (javítható):':'🕘 Tervezett kezdés:'}</span><input type="time" data-start="1" value="${v}" style="padding:8px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit">${!today.startedAt&&today.planStart?'<button data-act="planStartDel" title="Most indulok">✕</button>':''}</div>`;}
-  h+=`<div class="row" style="margin:0 0 10px">${!today.startedAt?'<button class="okb flex1" data-act="start">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end">⏹ Munka vége</button>'}
-  <button class="pri flex1" data-act="optimize">🧭 Útvonal újratervezése</button></div>`+`<div class="row" style="margin:0 0 10px">${today.stops.some(s=>s.status!=='done'&&s.type!=='depot')?`<button class="flex1" data-act="loadOpen">🧺 Bepakolás</button>`:''}${today.startedAt?`<button class="flex1" data-act="outNow">🏭 Kifogytam</button>`:''}<button class="flex1" data-act="apptNew">📅 + Időpontos program</button></div>`+(today.stops.some(s=>s.status!=='done'&&s.type!=='depot')?`<div class="row" style="margin:-4px 0 10px"><button class="flex1 ${ui.shortList?'on':''}" data-act="shortList">📋 Sorrend röviden</button><button class="flex1 ${ui.ordEdit?'on':''}" data-act="ordEdit">✋ Kézzel${today.orderLocked?' · 🔒':today.stops.some(s=>s.status!=='done'&&s.locked)?' · 📌':''}</button></div>`:'')+deadlineLine()+skippedLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
+  h+=`<div class="row" style="margin:0 0 8px;align-items:center;gap:6px"><span class="small" style="white-space:nowrap">${today.startedAt?'▶ Kezdés:':'🕘 Kezdés:'}</span><input type="time" data-start="1" value="${v}" style="flex:1;min-width:0;margin:0;padding:6px 8px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit">${!today.startedAt&&today.planStart?'<button class="sm" data-act="planStartDel" title="Most indulok">✕</button>':''}</div>`;}
+  {const hp=today.stops.some(s=>s.status!=='done'&&s.type!=='depot');
+  h+=`<div class="row" style="margin:0 0 8px">${!today.startedAt?'<button class="okb flex1" data-act="start" style="padding:12px 8px">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end" style="padding:12px 8px">⏹ Munka vége</button>'}
+  <button class="pri flex1" data-act="optimize" style="padding:12px 8px">🧭 Újratervezés</button></div>
+  <div class="row" style="margin:0 0 8px;gap:6px">${today.startedAt?`<button class="flex1 sm" data-act="outNow">🏭 Kifogytam</button>`:hp?`<button class="flex1 sm" data-act="loadOpen">🧺 Pakolás</button>`:''}<button class="flex1 sm" data-act="apptNew">📅 Program</button>${hp?`<button class="flex1 sm ${ui.shortList?'on':''}" data-act="shortList">📋 Rövid</button><button class="flex1 sm ${ui.ordEdit?'on':''}" data-act="ordEdit">✋ Kézzel${today.orderLocked?' 🔒':today.stops.some(s=>s.status!=='done'&&s.locked)?' 📌':''}</button>`:''}</div>`}
+  h+=''+deadlineLine()+skippedLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
   const pend=stops.filter(s=>s.status!=='done');
   const doneL=stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt);
   let r=doneL.filter(s=>s.type==='depot').length+1,startRound=true;
   const roundPacks=i=>{let t=0;for(let j=i;j<pend.length&&pend[j].type!=='depot';j++)t+=pkOf(pend[j]);return t};
   if(!today.startedAt&&!doneL.length&&pend.some(s=>s.type!=='depot')){const w=wazeUrl(depotObj());
-    h+=`<div class="card pad" style="border:2px solid var(--pri,#2563eb)"><div class="small mut">A nap első lépése</div><b class="nm">🏭 Mosoda – felvétel</b><div class="small">${esc(cfg.depotAddr)}</div>${depotCodes()||'<div class="small mut">A belépőkód a táblázat „B35” / „RAKKULSO” sorából jön – most nincs benne.</div>'}
-    <div class="row">${w?`<a class="btn pri flex1" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás a mosodába</a>`:''}<button class="flex1" data-act="loadOpen">🧺 Bepakolás</button></div>
-    <div class="small mut" style="margin-top:6px">Ha bepakoltál, nyomd meg: ▶ Munka indítása.</div></div>`}
+    h+=`<div class="card pad" style="border:2px solid var(--pri,#2563eb);padding:10px 12px"><div style="display:flex;gap:8px;align-items:center"><div class="flex1" style="min-width:0"><b>🏭 Először: mosoda</b> <span class="small mut">${esc(cfg.depotAddr.replace(/,\s*Budapest$/,''))}</span></div>
+    ${w?`<a class="btn pri sm" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás</a>`:''}</div>${depotCodes()}</div>`}
   let seqN=0;
   if(ui.ordEdit&&pend.length)return h+ordEditor(pend)+(doneL.length?`<div class="rnd">✔ Elkészült (${doneL.length})</div>`:'')+pasteBox(true);
   pend.forEach((s,i)=>{
