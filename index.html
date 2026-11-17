@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.29.0">
+<meta name="app-version" content="1.30.0">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1272,7 +1272,7 @@ function actRow(s,a){
   const url=wazeUrl(depot?depotObj():a);
   const arr=s.arrivedAt?`<span class="tag" style="align-self:center">🅿 ${fmtT(s.arrivedAt)}</span>`:`<button class="flex1" data-act="arrive" data-id="${s.id}">${s.type==='depot'?'🅿 Megérkeztem':'🅿 Leparkoltam'}</button>`;
   return`<div class="acts"><div class="row" style="margin-top:0"><a class="btn navbtn ${url?'':'dis'}" ${url?`href="${esc(url)}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>Navigálás</a>${arr}</div>
-  <div class="row">${depot?`<button class="okb flex1" data-act="done" data-id="${s.id}">✔ ${end?'Leadtam':'Újratöltöttem'}</button>`:`<button class="okb flex1" data-act="doneViber" data-id="${s.id}">✔ Kész + 💬 Üzenet</button>`}</div>
+  <div class="row">${depot?`${end?'':`<button class="flex1" data-act="loadOpen" data-at="${s.id}">🧺 Pakolás</button>`}<button class="okb flex1" data-act="done" data-id="${s.id}">✔ ${end?'Leadtam':'Újratöltöttem'}</button>`:`<button class="okb flex1" data-act="doneViber" data-id="${s.id}">✔ Kész + 💬 Üzenet</button>`}</div>
   ${depot?'':`<div class="row"><button class="flex1 sm" data-act="later" data-id="${s.id}">↩ Később jövök</button>${!today.startedAt||s.viaDepot?`<button class="flex1 sm ${s.viaDepot?'on':''}" data-act="viaDepot" data-id="${s.id}">${s.viaDepot?'✕ Megvan a tiszta':'🧺 Mosás nincs kész'}</button>`:''}</div>`}</div>`;
 }
 const grpApts=s=>s&&s.members?s.members.map(n=>({n,a:findApt(n)})).filter(x=>x.a):null;
@@ -1364,11 +1364,9 @@ function depotCard(s){
   <div class="head" data-act="toggle" data-id="${s.id}"><div class="grow"><b class="nm">🏭 ${end?'Vissza a mosodába':s.pickupFor?esc(s.name):'Újratöltés a mosodában'}</b>${!done&&s.pickupFor&&s.readyAt?`<div class="dlrow"><span class="dlb">⏳ kész: ${fmtT(s.readyAt)}</span></div>`:''}
   <div class="small">${esc(cfg.depotAddr)}</div>${done?'':depotCodes()}
   <div class="small mut">${end?'Szennyes leadása':'Szennyes leadása, tiszta felvétele'}</div>${done?`<div class="log">${logLine(s)}</div>`:''}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
-  if(!done&&!end&&!s.pickupFor)h+=`<div class="row"><button class="flex1 ${s.pinned?'on':''}" data-act="pinTog" data-id="${s.id}">${s.pinned?'📌 Rögzítve ide – feloldás':'📌 Rögzítsd ide (kifogytam)'}</button></div>`;
-  if(!done&&!end)h+=`<div class="row"><button class="flex1" data-act="loadOpen" data-at="${s.id}">🧺 Bepakolás – mit vigyél ${s.pickupFor?'el':'a következő körre'}</button></div>`;
   if(!done)h+=actRow(s,null);
   if(open){
-    h+=`<div class="body"><div class="row">${(end||done)?'':`<button data-act="move" data-id="${s.id}" data-d="-1">▲</button><button data-act="move" data-id="${s.id}" data-d="1">▼</button>`}
+    h+=`<div class="body">${!done&&!end&&!s.pickupFor?`<div class="row" style="margin-top:0"><button class="flex1 sm ${s.pinned?'on':''}" data-act="pinTog" data-id="${s.id}">${s.pinned?'📌 Rögzítve ide – feloldás':'📌 Rögzítsd ide (kifogytam)'}</button></div>`:''}<div class="row">${(end||done)?'':`<button data-act="move" data-id="${s.id}" data-d="-1">▲</button><button data-act="move" data-id="${s.id}" data-d="1">▼</button>`}
     ${done?`<button data-act="undo" data-id="${s.id}">↩ Visszavon</button>`:''}${end?'':`<button class="bad" data-act="del" data-id="${s.id}">✕ Törlés</button>`}</div></div>`;
   }
   return h+'</div>';
@@ -1435,9 +1433,12 @@ function compactCard(s,n){
   const dep=s.type==='depot';
   const nm=dep?(s.kind==='end'?'🏭 Vissza a mosodába':s.pickupFor?'🏭 '+esc(s.name):'🏭 Újratöltés'):(s.appt?(s.apt?'📍 ':'📅 '):'')+esc(s.name)+(s.members?` <span class="mut small">(${s.members.length})</span>`:'');
   const dl=dep?'':s.appt?(apMode(s)==='any'?'':apTimeTxt(s)):s.nobook?'':s.dl&&s.dl.at?'⏰ '+hhmm(s.dl.at):'';
-  return`<div class="card ${dep?'depot':'stop'} ${!dep&&s.urgent?'urg':''}" data-act="toggle" data-id="${s.id}" style="display:flex;gap:8px;align-items:center;padding:11px 12px;cursor:pointer">
-    <b style="min-width:24px">${dep?'':n+'.'}</b><span class="flex1" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${nm}${!dep&&s.urgent?' ⚡':''}${s.locked?' 📌':''}</span>
-    <span class="small mut" style="white-space:nowrap">${dl}</span><b class="${s.late?'late':''}" style="min-width:44px;text-align:right">${s.eta?hhmm(s.eta):''}</b></div>`;
+  const fx=today.orderLocked||s.locked||(dep&&s.pinned),end=dep&&s.kind==='end';
+  return`<div class="card ordrow ${dep?'depot':'stop'} ${!dep&&s.urgent?'urg':''}" data-oid="${s.id}" data-act="toggle" data-id="${s.id}" style="display:flex;gap:6px;align-items:center;padding:6px 8px 6px 2px;cursor:pointer;${fx?'box-shadow:inset 4px 0 0 var(--pri,#2563eb)':''}">
+    ${end?'<span style="width:34px"></span>':`<span data-drag="${s.id}" style="touch-action:none;cursor:grab;font-size:20px;padding:6px 8px;user-select:none;color:var(--mut)">☰</span>`}
+    <b style="min-width:22px">${dep?'':n+'.'}</b><span class="flex1" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${nm}${!dep&&s.urgent?' ⚡':''}</span>
+    <span class="small mut" style="white-space:nowrap">${dl}</span><b class="${s.late?'late':''}" style="min-width:42px;text-align:right">${s.eta?hhmm(s.eta):''}</b>
+    ${dep?'<span style="width:34px"></span>':`<button class="sm ${s.locked?'on':''}" data-act="ordPin" data-id="${s.id}" style="padding:6px 7px!important;${s.locked?'':'opacity:.35'}" title="Rögzítés">📌</button>`}</div>`;
 }
 function stopCard(s){
   if(s.type==='depot')return depotCard(s);
@@ -1533,7 +1534,7 @@ function viewToday(){
   {const hp=today.stops.some(s=>s.status!=='done'&&s.type!=='depot');
   h+=`<div class="row" style="margin:0 0 8px">${!today.startedAt?'<button class="okb flex1" data-act="start" style="padding:12px 8px">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end" style="padding:12px 8px">⏹ Munka vége</button>'}
   <button class="pri flex1" data-act="optimize" style="padding:12px 8px">🧭 Újratervezés</button></div>
-  <div class="row" style="margin:0 0 8px;gap:6px">${today.startedAt?`<button class="flex1 sm" data-act="outNow">🏭 Kifogytam</button>`:hp?`<button class="flex1 sm" data-act="loadOpen">🧺 Pakolás</button>`:''}<button class="flex1 sm" data-act="apptNew">📅 Program</button>${hp?`<button class="flex1 sm ${ui.shortList?'on':''}" data-act="shortList">📋 Rövid</button><button class="flex1 sm ${ui.ordEdit?'on':''}" data-act="ordEdit">✋ Kézzel${today.orderLocked?' 🔒':today.stops.some(s=>s.status!=='done'&&s.locked)?' 📌':''}</button>`:''}</div>`}
+  <div class="row" style="margin:0 0 8px;gap:6px">${today.startedAt?`<button class="flex1 sm" data-act="outNow">🏭 Kifogytam</button>`:hp?`<button class="flex1 sm" data-act="loadOpen">🧺 Pakolás</button>`:''}<button class="flex1 sm" data-act="apptNew">📅 Program</button>${hp?`<button class="flex1 sm ${ui.shortList?'on':''}" data-act="shortList">📋 Rövid / sorrend${today.orderLocked?' 🔒':today.stops.some(s=>s.status!=='done'&&s.locked)?' 📌':''}</button>`:''}</div>`}
   h+=''+deadlineLine()+skippedLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
   const pend=stops.filter(s=>s.status!=='done');
   const doneL=stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt);
@@ -1541,8 +1542,11 @@ function viewToday(){
   const roundPacks=i=>{let t=0;for(let j=i;j<pend.length&&pend[j].type!=='depot';j++)t+=pkOf(pend[j]);return t};
   if(!today.startedAt&&!doneL.length&&pend.some(s=>s.type!=='depot')){const w=wazeUrl(depotObj());
     h+=`<div class="card pad" style="border:2px solid var(--pri,#2563eb);padding:10px 12px"><div style="display:flex;gap:8px;align-items:center"><div class="flex1" style="min-width:0"><b>🏭 Először: mosoda</b> <span class="small mut">${esc(cfg.depotAddr.replace(/,\s*Budapest$/,''))}</span></div>
-    ${w?`<a class="btn pri sm" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás</a>`:''}</div>${depotCodes()}</div>`}
+    ${w?`<a class="btn pri sm" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás</a>`:''}</div>${ui.shortList?'':depotCodes()}</div>`}
   let seqN=0;
+  if(ui.shortList&&pend.some(s=>s.type!=='depot')){const anyL=pend.some(s=>s.locked||(s.type==='depot'&&s.pinned));
+    h+=`<div class="small mut" style="margin:0 0 6px">☰ húzd a sorrendhez · 📌 rögzít (az újratervezés eddig nem nyúl hozzá) · koppints a névre a részletekért</div>
+    <div class="row" style="margin:0 0 8px;gap:6px"><button class="flex1 sm ${today.orderLocked?'on':''}" data-act="ordLockAll">${today.orderLocked?'🔒 Rögzítve – feloldás':'🔒 Egész rögzítése'}</button>${anyL&&!today.orderLocked?`<button class="flex1 sm" data-act="ordUnpin">📌 Rögzítések törlése</button>`:''}</div>`}
   if(ui.ordEdit&&pend.length)return h+ordEditor(pend)+(doneL.length?`<div class="rnd">✔ Elkészült (${doneL.length})</div>`:'')+pasteBox(true);
   pend.forEach((s,i)=>{
     if(startRound&&s.type!=='depot'){h+=`<div class="rnd">${r}. kör · 📦 ${roundPacks(i)} csomag</div>`;startRound=false}
@@ -1885,8 +1889,7 @@ function ordEditor(pend){
 function ordMove(id,to){ // to: index a függő listában
   const pend=today.stops.filter(s=>s.status!=='done'),s=pend.find(x=>x.id===id);if(!s)return;
   const endI=pend.findIndex(x=>x.type==='depot'&&x.kind==='end');
-  to=Math.max(0,Math.min(to,(endI<0?pend.length:endI)-(pend.indexOf(s)<to?0:0)));
-  const rest=pend.filter(x=>x!==s);if(endI>=0&&to>=rest.indexOf(pend[endI]))to=rest.indexOf(pend[endI]);
+  const rest=pend.filter(x=>x!==s);to=Math.max(0,Math.min(to,rest.length));if(endI>=0&&to>rest.indexOf(pend[endI]))to=rest.indexOf(pend[endI]);
   rest.splice(to,0,s);if(s.type!=='depot')s.locked=true;else if(s.kind==='reload')s.pinned=true;
   const done=today.stops.filter(x=>x.status==='done');today.stops=[...done,...rest];
   rest.forEach(x=>{delete x.legPlanMin;delete x.legPlanKm;delete x.legPlanEta;delete x.svcPlanMin});
@@ -1896,11 +1899,17 @@ let ordDrag=null;
 document.addEventListener('pointerdown',e=>{const hd=e.target.closest&&e.target.closest('[data-drag]');if(!hd)return;e.preventDefault();
   const row=hd.closest('.ordrow');ordDrag={id:hd.dataset.drag,row,y0:e.clientY,tgt:null};row.style.opacity='.6';row.style.boxShadow='0 4px 14px rgba(0,0,0,.3)';try{hd.setPointerCapture(e.pointerId)}catch(x){}});
 document.addEventListener('pointermove',e=>{if(!ordDrag)return;e.preventDefault();ordDrag.row.style.transform=`translateY(${e.clientY-ordDrag.y0}px)`;
-  const rows=[...document.querySelectorAll('.ordrow')];let t=rows.length-1;for(let i=0;i<rows.length;i++){const r=rows[i].getBoundingClientRect();if(e.clientY<r.top+r.height/2){t=i;break}}
-  rows.forEach((r,i)=>r.style.borderTop=i===t&&r!==ordDrag.row?'3px solid var(--pri,#2563eb)':'');ordDrag.tgt=t;
+  const rows=[...document.querySelectorAll('.ordrow')].filter(r=>r!==ordDrag.row);let t=null;for(const r of rows){const b=r.getBoundingClientRect();if(e.clientY<b.top+b.height/2){t=r;break}}
+  rows.forEach(r=>{r.style.borderTop=r===t?'3px solid var(--pri,#2563eb)':'';r.style.borderBottom=''});if(!t&&rows.length)rows[rows.length-1].style.borderBottom='3px solid var(--pri,#2563eb)';
+  ordDrag.tgt=t?{id:t.dataset.oid,after:false}:rows.length?{id:rows[rows.length-1].dataset.oid,after:true}:null;ordDrag.moved=true;
   if(e.clientY<60)scrollBy(0,-12);else if(e.clientY>innerHeight-90)scrollBy(0,12)},{passive:false});
 document.addEventListener('pointerup',e=>{if(!ordDrag)return;const d=ordDrag;ordDrag=null;d.row.style.transform='';d.row.style.opacity='';
-  if(d.tgt==null){render();return}const pend=today.stops.filter(s=>s.status!=='done'),from=pend.findIndex(s=>s.id===d.id);let to=d.tgt;if(to>from)to--;if(to!==from)ordMove(d.id,to);else render()});
+  ordDrag_t=performance.now();if(!d.tgt||!d.moved){render();return}
+  const pend=today.stops.filter(s=>s.status!=='done'),from=pend.findIndex(s=>s.id===d.id),rest=pend.filter(s=>s.id!==d.id);
+  let to=rest.findIndex(s=>s.id===d.tgt.id);if(to<0){render();return}if(d.tgt.after)to++;
+  if(to===from){render();return}
+  ordMove(d.id,to)});
+let ordDrag_t=-1e9;
 function skippedLine(){const K=today&&today.skipped||[];return K.length?`<div class="dl">🚫 Ma kimarad: ${K.map(s=>`<b>${esc(s.name)}</b>${s.skipReason?' ('+esc(s.skipReason)+')':''} <a href="#" data-act="unskip" data-id="${s.id}">↩ vissza</a>`).join(', ')}</div>`:''}
 function loadModal(){
   const m=ui.modal,pend=today.stops.filter(s=>s.status!=='done'&&s.type!=='depot');
@@ -2196,6 +2205,7 @@ async function initMap(){
 }
 function render(){
   if(ui.tab!=='map'&&mapObj){try{mapObj.remove()}catch(e){}mapObj=null}
+  if(ui.loadAfter&&!ui.modal&&today){ui.loadAfter=false;ui.modal={kind:'load',at:null}} // munka indítása (és a km-óra) után: bepakolás
   const om=document.querySelector('#app .modal'),mk=ui.modal&&ui.modal.kind,msc=om&&mk===render._mk?om.scrollTop:0;
   $('#app').innerHTML=modalHtml()+banners()+(ui.tab==='today'?viewToday():ui.tab==='map'?viewMap():ui.tab==='apts'?viewApts():ui.tab==='hist'?viewHist():viewSet());
   if(ui.tab==='map')initMap();
@@ -2215,6 +2225,7 @@ document.addEventListener('visibilitychange',()=>{
 
 /* ===== események ===== */
 document.addEventListener('click',e=>{
+  if(e.target.closest&&e.target.closest('[data-drag]')||performance.now()-ordDrag_t<350)return;
   const el=e.target.closest('[data-act]');if(!el)return;
   const d=el.dataset,act=d.act,stop=d.id&&today?today.stops.find(s=>s.id===d.id):null;
   if(act==='depotNav'){if(today&&!today.depotNavAt){today.depotNavAt=Date.now();save()}return}
@@ -2234,7 +2245,7 @@ document.addEventListener('click',e=>{
     if(d.mode==='new'&&today&&!confirm('Van folyamatban lévő nap. Eldobod és újat kezdesz? (Lezárni a „Munka vége” gombbal tudod mentéssel.)'))return;
     ui.paste='';loadDay(names,date,d.mode==='add',urgent,info);return;
   }
-  if(act==='start'){startShift();if(cfg.meterAsk!=='0'){ui.modal={kind:'meter',which:'start',date:today.date};render()}return}
+  if(act==='start'){startShift();ui.loadAfter=today.stops.some(s=>s.status!=='done'&&s.type!=='depot'&&!s.appt&&pkOf(s)>0);if(cfg.meterAsk!=='0'){ui.modal={kind:'meter',which:'start',date:today.date};render()}else render();return}
   if(act==='end'){const dt=today.date;endShift();if(!today&&cfg.meterAsk!=='0'){ui.modal={kind:'meter',which:'end',date:dt};render()}return}
   if(act==='optimize'){optimize();return}
   if(act==='syncNow'){syncData(true);return}
@@ -2339,7 +2350,7 @@ document.addEventListener('click',e=>{
     const [s]=K.splice(i,1);delete s.skipReason;delete s.skipAt;const end=today.stops.findIndex(x=>x.type==='depot'&&x.kind==='end'&&x.status!=='done');
     today.stops.splice(end<0?today.stops.length:end,0,s);save();render();toast('↩ '+s.name+' visszakerült – újratervezés…');optimize();return}
   if(act==='mbUnpause'){e.preventDefault&&e.preventDefault();LS.set('mbPaused','');render();toast('Rendben – a következő tervezésnél újra próbálja');return}
-  if(act==='shortList'){ui.shortList=!ui.shortList;render();return}
+  if(act==='shortList'){ui.shortList=!ui.shortList;ui.ordEdit=false;ui.open=null;render();return}
   if(act==='goStopX'){ui.open=d.id;render();setTimeout(()=>{const b=document.querySelector(`.card [data-act=toggle][data-id="${d.id}"]`)||document.querySelector(`[data-id="${d.id}"]:not([data-act=goStop])`);if(b)b.closest('.card').scrollIntoView({behavior:'smooth',block:'start'})},30);return}
   if(act==='ordEdit'){ui.ordEdit=!ui.ordEdit;ui.open=null;render();return}
   if(act==='ordMv'){const pend=today.stops.filter(s=>s.status!=='done'),i=pend.findIndex(s=>s.id===d.id);if(i<0)return;const j=i+(+d.d);if(j<0||j>=pend.length||pend[j].kind==='end')return;ordMove(d.id,j);return}
