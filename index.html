@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.26.0">
+<meta name="app-version" content="1.26.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1524,7 +1524,7 @@ function viewToday(){
   let r=doneL.filter(s=>s.type==='depot').length+1,startRound=true;
   const roundPacks=i=>{let t=0;for(let j=i;j<pend.length&&pend[j].type!=='depot';j++)t+=pkOf(pend[j]);return t};
   if(!today.startedAt&&!doneL.length&&pend.some(s=>s.type!=='depot')){const w=wazeUrl(depotObj());
-    h+=`<div class="card pad" style="border:2px solid var(--pri,#2563eb)"><div class="small mut">A nap első lépése</div><b class="nm">🏭 Mosoda – felvétel</b><div class="small">${esc(cfg.depotAddr)}</div>
+    h+=`<div class="card pad" style="border:2px solid var(--pri,#2563eb)"><div class="small mut">A nap első lépése</div><b class="nm">🏭 Mosoda – felvétel</b><div class="small">${esc(cfg.depotAddr)}</div>${depotCodes()||'<div class="small mut">A belépőkód a táblázat „B35” / „RAKKULSO” sorából jön – most nincs benne.</div>'}
     <div class="row">${w?`<a class="btn pri flex1" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás a mosodába</a>`:''}<button class="flex1" data-act="loadOpen">🧺 Bepakolás</button></div>
     <div class="small mut" style="margin-top:6px">Ha bepakoltál, nyomd meg: ▶ Munka indítása.</div></div>`}
   if(ui.ordEdit&&pend.length)return h+ordEditor(pend)+(doneL.length?`<div class="rnd">✔ Elkészült (${doneL.length})</div>`:'')+pasteBox(true);
