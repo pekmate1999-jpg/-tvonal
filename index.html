@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.30.2">
+<meta name="app-version" content="1.31.0">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1328,7 +1328,7 @@ function aptNav(a){
     const st=a.geoManual?'📍 bejárat mentve':a.lat&&a.geoOk&&a.geoPrecise&&a.geoV===GEO_V?'✅ pontos':a.lat&&a.geoOk&&a.geoV===GEO_V?'<span class="warn">⚠ csak az utca – mentsd a bejáratot</span>':a.geoV===GEO_V&&!a.lat?'<span class="warn">⚠ nincs a térképen</span>':'⏳';
     const pi=parkInfo(a.address);
     h+=`<div class="small mut">🧭 ${esc(p.street?p.full:a.address)} · ${st}${pi?' · 🅿 '+pi:''}</div>
-    <div class="row" style="margin-top:4px">${a.lat?`<a class="btn sm flex1" href="https://www.google.com/maps/search/?api=1&query=${a.lat},${a.lon}" target="_blank" rel="noopener">🗺 Térkép</a>`:''}<button class="sm flex1" data-act="hereGps" data-key="${esc(k)}">📍 Bejárat itt</button><button class="sm flex1" data-act="parkHere" data-addr="${esc(a.address)}">🅿 Parkoló itt</button>${pi?`<button class="sm" data-act="parkDel" data-addr="${esc(a.address)}">✕</button>`:''}</div>`;
+    <div class="row" style="margin-top:4px">${a.lat?`<a class="btn sm flex1" href="https://www.google.com/maps/search/?api=1&query=${a.lat},${a.lon}" target="_blank" rel="noopener">🗺 Térkép</a>`:''}<button class="sm flex1" data-act="hereGps" data-key="${esc(k)}">📍 Bejárat itt</button><button class="sm flex1" data-act="parkHere" data-addr="${esc(a.address)}">🅿 Parkoló itt</button><button class="sm" data-act="pickPark" data-addr="${esc(a.address)}" data-label="${esc(a.name)}" title="Parkolóhely kijelölése a térképen">🗺🅿</button>${pi?`<button class="sm" data-act="parkDel" data-addr="${esc(a.address)}">✕</button>`:''}</div>`;
   }
   return h;
 }
@@ -1544,7 +1544,7 @@ function viewToday(){
   const roundPacks=i=>{let t=0;for(let j=i;j<pend.length&&pend[j].type!=='depot';j++)t+=pkOf(pend[j]);return t};
   if(!today.startedAt&&!doneL.length&&pend.some(s=>s.type!=='depot')){const w=wazeUrl(depotObj());
     h+=`<div class="card pad" style="border:2px solid var(--pri,#2563eb);padding:10px 12px"><div style="display:flex;gap:8px;align-items:center"><div class="flex1" style="min-width:0"><b>🏭 Először: mosoda</b> <span class="small mut">${esc(cfg.depotAddr.replace(/,\s*Budapest$/,''))}</span></div>
-    ${w?`<a class="btn pri sm" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás</a>`:''}</div>${ui.shortList?'':depotCodes()}</div>`}
+    ${w?`<a class="btn pri sm" href="${w}" target="_blank" rel="noopener" data-act="depotNav">🧭 Navigálás</a>`:''}</div>${ui.shortList?'':depotCodes()+`<div class="row" style="margin-top:6px"><button class="sm flex1" data-act="pickPark" data-addr="${esc(cfg.depotAddr)}" data-label="Mosoda">🅿 ${parkOf(cfg.depotAddr)?'Parkolóhely mentve – módosítás':'Hol parkolsz? Jelöld ki a térképen'}</button></div>`}</div>`}
   let seqN=0;
   if(ui.shortList&&pend.some(s=>s.type!=='depot')){const anyL=pend.some(s=>s.locked||(s.type==='depot'&&s.pinned));
     h+=`<div class="small mut" style="margin:0 0 6px">☰ húzd a sorrendhez · 📌 rögzít (az újratervezés eddig nem nyúl hozzá) · koppints a névre a részletekért</div>
@@ -1673,6 +1673,7 @@ function viewSet(){
   const num=(k,l)=>`<div class="lbl">${l}</div><input data-cfg="${k}" data-num="1" type="number" inputmode="numeric" min="0" value="${esc(cfg[k])}">`;
   return`<h2>Beállítások</h2><div class="card pad">
   <div class="lbl" style="margin-top:0">Raktár / mosoda címe (felvétel és szennyes leadás)</div><input data-cfg="depotAddr" value="${esc(cfg.depotAddr)}">
+  <div class="row"><button class="flex1" data-act="pickPark" data-addr="${esc(cfg.depotAddr)}" data-label="Mosoda">🗺 Raktár parkolóhely kijelölése a térképen</button></div>
   <div class="row"><button class="flex1" data-act="parkHere" data-addr="${esc(cfg.depotAddr)}">🅿 A raktárnál itt parkolok (mentés)</button>${parkInfo(cfg.depotAddr)?`<button data-act="parkDel" data-addr="${esc(cfg.depotAddr)}">✕</button>`:''}</div>${parkInfo(cfg.depotAddr)?`<div class="small">🅿 Raktár parkolóhely: ${parkInfo(cfg.depotAddr)}</div>`:''}
   ${num('cap','Autó kapacitása (csomag / kör, 0 = nincs korlát)')}
   ${num('stopMin','Várakozás lakásonként (perc)')}
@@ -2155,6 +2156,9 @@ async function routeGeom(pts){
   geomCache.set(key,g);return g;
 }
 function viewMap(){
+  if(ui.pickPark)return topBar()+`<div class="card pad" style="border:2px solid var(--pri,#2563eb)"><b>🅿 ${esc(ui.pickPark.label)} – parkolóhely kijelölése</b>
+    <div class="small">Nagyíts rá, és koppints oda, <b>ahol az autóval megállsz</b> – az út azon oldalára. A Waze és a tervezés ide visz, erről az oldalról.</div>
+    <div class="row"><button class="flex1 sm" data-act="pickParkCancel">Mégse</button></div></div><div id="map"></div>`;
   if(!today)return topBar()+'<div class="card pad">Még nincs mai lista. Illeszd be a reggeli üzenetet a Ma fülön.</div>';
   const{done,pend,miss}=mapSeq();
   const pa=pend.filter(s=>s.type!=='depot');
@@ -2169,6 +2173,17 @@ function viewMap(){
 }
 async function initMap(){
   try{await loadLeaflet()}catch(e){const m=$('#map');if(m)m.innerHTML=`<div class="pad">${esc(e.message)}</div>`;return}
+  if(ui.pickPark){const el=$('#map');if(!el)return;if(mapObj){try{mapObj.remove()}catch(e){}mapObj=null}
+    const L=window.L,P=ui.pickPark,map=L.map(el,{zoomControl:true});mapObj=map;
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+    const cur=parkOf(P.addr),c=cur||P.center;map.setView([c.lat,c.lon],18);
+    let mk=cur?L.marker([cur.lat,cur.lon]).addTo(map).bindTooltip('mostani parkolóhely',{permanent:true}):null;
+    if(P.center)L.circleMarker([P.center.lat,P.center.lon],{radius:6,color:'#888'}).addTo(map).bindTooltip('cím');
+    map.on('click',e=>{const p=e.latlng;if(mk)map.removeLayer(mk);mk=L.marker(p).addTo(map);
+      setTimeout(()=>{if(!confirm('Ide mentsem a parkolóhelyet?'))return;cfg.parks=cfg.parks||{};const k=pkKey(P.addr);
+        cfg.parks[k]={...(cfg.parks[k]||{}),manual:{lat:+p.lat.toFixed(6),lon:+p.lng.toFixed(6),at:Date.now(),map:true}};
+        const back=P.back;ui.pickPark=null;ui.tab=back||'today';save();render();toast('🅿 Parkolóhely mentve – újratervezés…');if(today)optimize()},60)});
+    return}
   const el=$('#map');if(!el||!today)return;
   if(mapObj){try{mapObj.remove()}catch(e){}mapObj=null}
   const L=window.L,map=L.map(el,{zoomControl:true,attributionControl:true});mapObj=map;
@@ -2359,6 +2374,11 @@ document.addEventListener('click',e=>{
   if(act==='ordPin'&&stop){stop.locked=!stop.locked;save();render();toast(stop.locked?'📌 Rögzítve – az újratervezés eddig nem nyúl hozzá':'Feloldva');return}
   if(act==='ordUnpin'){today.stops.forEach(s=>{if(s.status!=='done'){delete s.locked;if(s.type==='depot')delete s.pinned}});save();render();toast('📌 Rögzítések törölve');return}
   if(act==='ordLockAll'){today.orderLocked=!today.orderLocked;save();render();toast(today.orderLocked?'🔒 Rögzítve – az újratervezés csak az időket számolja':'🔓 Feloldva');return}
+  if(act==='pickPark'){const addr=d.addr;if(!addr)return;let c=null;
+    if(addr===cfg.depotAddr&&cfg.depotLat)c={lat:cfg.depotLat,lon:cfg.depotLon};else{const a=Object.values(apts).find(x=>x.address===addr)||(today&&today.stops.map(getApt).find(x=>x&&x.address===addr));if(a&&a.lat)c={lat:a.lat,lon:a.lon}}
+    if(!c&&!parkOf(addr)){toast('Ennek a címnek még nincs helye a térképen');return}
+    ui.pickPark={addr,label:d.label||addr,center:c||parkOf(addr),back:ui.tab};ui.tab='map';render();return}
+  if(act==='pickParkCancel'){const b=ui.pickPark&&ui.pickPark.back;ui.pickPark=null;ui.tab=b||'today';render();return}
   if(act==='loadOpen'){ui.modal={kind:'load',at:d.at||null};render();return}
   if(act==='loadClose'){ui.modal=null;render();return}
   if(act==='loadPlan'){ui.modal=null;render();optimize();return}
