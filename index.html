@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.1">
+<meta name="app-version" content="1.32.2">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -794,19 +794,20 @@ async function doPlan(){
   today.timedN=0;
   if(futOn()&&legs.length&&legs[0].src==='traffic'){
     let t=planNow();const need=[];
-    items.forEach((s,i)=>{const L=legs[i],dep=t;t+=predDrive(L.min,L.src,s,L.km<0.05)*6e4;if(apStart(s)!=null)t=Math.max(t,apStart(s));t+=svcMs(s);
+    items.forEach((s,i)=>{const L=legs[i],dep=t;t=s.arrivedAt&&s.status!=='done'?s.arrivedAt:t+predDrive(L.min,L.src,s,L.km<0.05)*6e4;if(apStart(s)!=null)t=Math.max(t,apStart(s));t+=svcMs(s);
       if(dep-Date.now()>30*6e4&&L.km>=0.05)need.push([i,dep])});
     await pool(need,6,async([i,dep])=>{try{const v=await timedLeg(wp[i],wp[i+1],dep);legs[i].live=legs[i].min;legs[i].min=v.min;legs[i].dep=dep;legs[i].timed=true}catch(e){}});
     if(!today)return;
   }
   let t=planNow(),km=0,ap=false,aptDone=null;
-  items.forEach((s,i)=>{const L=legs[i];km+=L.km;ap=ap||L.approx;s.planKm=L.km;s.planMin=L.min;s.planSrc=L.src;
+  items.forEach((s,i)=>{const L=legs[i];const here=s.arrivedAt&&s.status!=='done'; // már ott vagy (Leparkoltam): az út megvolt
+    km+=here?0:L.km;ap=ap||L.approx;s.planKm=L.km;s.planMin=L.min;s.planSrc=L.src;
     if(L.timed){s.planTimed=true;s.planLive=L.live;s.planDep=L.dep;today.timedN++}else{delete s.planTimed;delete s.planLive;delete s.planDep}
     const hf=L.src!=='traffic'&&L.km>=0.05?learnH(t):1;s.planHf=hf;
-    s.planPred=predDrive(L.min*hf,L.src,s,L.km<0.05);t+=s.planPred*6e4;s.eta=t;
+    s.planPred=predDrive(L.min*hf,L.src,s,L.km<0.05);t=here?s.arrivedAt:t+s.planPred*6e4;s.eta=t;
     const af=afterOf(s);
     if(apStart(s)!=null){s.wait=Math.max(0,apStart(s)-t);t=Math.max(t,apStart(s))}else if(af&&t<af){s.wait=af-t;t=af}else delete s.wait;
-    t+=svcMs(s);s.etaDone=t;if(s.type!=='depot'&&!s.appt)aptDone=t;
+    t+=svcMs(s);if(here)t=Math.max(t,Date.now());s.etaDone=t;if(s.type!=='depot'&&!s.appt)aptDone=t;
     s.late=s.appt?(apStart(s)!=null?s.eta>s.appt.start+6e4:apDlBy(s)!=null&&s.eta>apDlBy(s)+6e4):!!(s.dl&&s.dl.at&&(s.dl.type==='arrive'?s.eta:s.etaDone)>s.dl.at+6e4)});
   today.remKm=km;today.planApprox=ap;today.planSrc=legs[0]&&legs[0].src;today.aptDoneEta=aptDone;
   pend.forEach((s,i)=>{if(i>0){delete s.legPlanMin;delete s.legPlanKm;delete s.legPlanEta;delete s.svcPlanMin;delete s.legPlanSrc;delete s.legPlanPred}});
