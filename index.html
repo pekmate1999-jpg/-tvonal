@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.31.0">
+<meta name="app-version" content="1.32.0">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1295,6 +1295,11 @@ function depotCodes(){
   return L.length?`<div class="cl">${L.map(a=>`${esc(a.name)}: ${[a.gate?'🚪 '+esc(a.gate):'',a.code?'🔑 '+esc(a.code):''].filter(Boolean).join(' · ')}`).join('<br>')}</div>`:'';
 }
 const INFO_T=[['🚪','Bejutás'],['🅿','Parkolás'],['🧺','Szennyes / tiszta helye'],['🔑','Kulcs'],['⚠','Figyelem'],['📝','Egyéb']];
+// saját megjegyzések az összecsukott kártyán is látszanak (max. 3 sor)
+function notesLine(s,a){if(!a)return'';const T=infoTargets(s,a),M=new Map();
+  T.forEach(x=>{[...(x.note?[{i:'📝',x:x.note}]:[]),...(x.infos||[])].forEach(n=>{const k=(n.i||'📝')+'|'+n.x;if(!M.has(k))M.set(k,{i:n.i||'📝',x:n.x,nm:[]});M.get(k).nm.push(infoLab(s,x))})});
+  const L=[...M.values()];if(!L.length)return'';
+  return`<div class="small" style="margin-top:4px;line-height:1.45">${L.slice(0,3).map(n=>`<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.i} ${T.length>1&&n.nm.length<T.length?'<b>'+esc(n.nm.join(', '))+':</b> ':''}${esc(n.x)}</div>`).join('')}${L.length>3?`<div class="mut">+${L.length-3} további</div>`:''}</div>`}
 function infoLab(s,a){const G=grpApts(s),g=G&&G.find(x=>x.a===a);return g?g.n:a.name}
 function infoTargets(s,a){const G=grpApts(s);return G&&G.length>1?G.map(x=>x.a):a?[a]:[]}
 function infoBlock(s,a){
@@ -1459,7 +1464,7 @@ function stopCard(s){
   <div class="small">${a?(a.address?esc(a.address):'<span class="warn">nincs cím a táblázatban</span>'):'<span class="warn">nincs meg a táblázatban – koppints rá</span>'}</div>
   ${a&&a.door&&!grpDiff(s).includes('door')?`<div class="small mut">Ajtó: ${esc(a.door)}</div>`:''}
   ${s.members?`<div class="small"><span class="same">🏢 ${s.members.length} lakás · egy leadási pont</span></div>`:''}
-  ${done?`<div class="log">${logLine(s)}</div>`:codesLineS(s,a)}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
+  ${done?`<div class="log">${logLine(s)}</div>`:codesLineS(s,a)+notesLine(s,a)}</div><span class="mut">${open?'▲':'▼'}</span></div>`;
   if(!done&&groupLead[s.id])h+=`<div class="acts" style="padding-bottom:0"><button class="flex1" style="width:100%" data-act="merge" data-id="${s.id}">🔗 Egy helyre megy mind a ${groupLead[s.id]} lakás? Összevonás</button></div>`;
   if(!done)h+=actRow(s,a);
   else h+=`<div class="acts"><div class="row" style="margin-top:0"><button class="flex1" data-act="viber" data-id="${s.id}">💬 Üzenet újraküldése</button></div></div>`;
@@ -1483,7 +1488,7 @@ function stopCard(s){
     if(!a||!a.address||ui.edit===s.id)h+=editFields(a,fa);
     h+=infoBlock(s,a)+aptHelp(ac)+todoBlock(s,done);
     const tl=stopTodos(s).length;
-    h+=`<div class="row" style="margin-top:8px">${a&&ui.infoAdd!==s.id?`<button class="sm flex1" data-act="infoAdd" data-id="${s.id}">➕ Info</button>`:''}${a&&!done&&ui.todoAdd!==s.id?`<button class="sm flex1" data-act="todoOpen" data-id="${s.id}">➕ Teendő</button>`:''}<button class="sm flex1 ${s.vnote?'on':''}" data-act="vnoteOpen" data-id="${s.id}">💬 Mai megj.</button></div>`;
+    h+=`<div class="row" style="margin-top:8px">${a&&ui.infoAdd!==s.id?`<button class="sm flex1" data-act="infoAdd" data-id="${s.id}">➕ Megjegyzés</button>`:''}${a&&!done&&ui.todoAdd!==s.id?`<button class="sm flex1" data-act="todoOpen" data-id="${s.id}">➕ Teendő</button>`:''}<button class="sm flex1 ${s.vnote?'on':''}" data-act="vnoteOpen" data-id="${s.id}">💬 Mai megj.</button></div>`;
     if(ui.vnoteOpen===s.id||s.vnote)h+=`<textarea data-vnote="${s.id}" placeholder="Csak erre a napra, a naplóba és az üzenetbe kerül" style="margin-top:6px">${esc(s.vnote||'')}</textarea>`;
     h+=`<div class="sec"><div class="row" style="margin-top:0"><div class="seg flex1"><button class="sm ${s.cleaner!=='strip'?'on':''}" data-act="${s.cleaner==='strip'?'strip':''}" data-id="${s.id}">✅ Takarító kész</button><button class="sm ${s.cleaner==='strip'?'on':''}" data-act="${s.cleaner==='strip'?'':'strip'}" data-id="${s.id}">🧺 Én húzom le</button></div></div>`;
     if((s.todosDone&&s.todosDone.length)||(s.todosLeft&&s.todosLeft.length))h+=`<div class="small" style="margin-top:6px">${(s.todosDone||[]).map(x=>'☑ '+esc(x)).join('<br>')}${(s.todosLeft||[]).length?'<br>'+s.todosLeft.map(x=>'<span class="late">☐ '+esc(x)+'</span>').join('<br>'):''}</div>`;
