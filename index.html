@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.0">
+<meta name="app-version" content="1.32.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1069,7 +1069,7 @@ const colType=h=>{h=String(h||'').trim();if(!h)return null;for(const[f,rx]of COL
 const cleanV=v=>{v=String(v??'').replace(/\s+/g,' ').trim();if(/^-?\d+\.0+$/.test(v))v=v.replace(/\.0+$/,'');return /^[-–x]$/i.test(v)?'':v};
 const helpAlias=t=>{const m=String(t||'').match(/^(.*?)\s*bejut\S*(\s+\S+)?\s*$/i);return m&&m[1].trim()?norm(m[1]):''};
 function importRows(rows,opt){
-  opt=opt||{};const seen=opt.seen||new Set();const T=r=>(r||[]).map(c=>typeof c==='object'&&c?c:{t:String(c??''),l:''});
+  opt=opt||{};const seen=opt.seen||new Set(),blanks=opt.blanks||new Set();const T=r=>(r||[]).map(c=>typeof c==='object'&&c?c:{t:String(c??''),l:''});
   rows=rows.map(T);
   let hi=-1,map=null;
   for(let i=0;i<Math.min(15,rows.length);i++){
@@ -1110,12 +1110,14 @@ function importRows(rows,opt){
     if(opt.hasLinks&&map.help)nv.helpUrl=link;
     const old=apts[k];
     const upd={...(old||{note:''}),name,sect,old:!!opt.old,aliases};
-    upd.manual={...((old&&old.manual)||{})};upd.mine={...((old&&old.mine)||{})};
+    upd.manual={...((old&&old.manual)||{})};upd.mine={...((old&&old.mine)||{})};if(old&&old.blank)upd.blank={...old.blank};
     const prev={};
     for(const[f,v]of Object.entries(nv)){
       if(v===undefined)continue;
       if(upd.mine[f]){if(v===upd.mine[f].from)continue;delete upd.mine[f]} // a táblázatban még a régi kód van → a tiéd marad
       if(!v&&upd.manual[f])continue;          // kézzel beírt adatot üres cella nem töröl
+      if(!v&&old&&CODE_FIELDS.includes(f)&&old[f]){(upd.blank=upd.blank||{})[f]=true;blanks.add(name);continue} // üres cella nem törli a meglévő kódot
+      if(v&&upd.blank)delete upd.blank[f];
       if(v)delete upd.manual[f];
       if(old&&CODE_FIELDS.includes(f)&&old[f]&&v&&old[f]!==v)prev[f]=old[f];
       upd[f]=v;
@@ -1131,7 +1133,7 @@ function importRows(rows,opt){
     const old=apts[gk]||{note:'',manual:{}};
     apts[gk]={...old,name:pre,group:true,aliases:old.aliases||[],help:'Szobák kódjai:\n'+rs.map(r=>`${r.room}: ${[r.gate,r.code].filter(Boolean).join(' / ')||'–'}`).join('\n'),address:old.address||''};
   }
-  return{n,changed};
+  return{n,changed,blanks};
 }
 function parseCSV(t,force){
   t=t.replace(/^﻿/,'');
@@ -1176,8 +1178,8 @@ function importBuffer(buf){
     if(/^\s*<(!doctype|html)/i.test(txt))throw new Error('a link nem táblázatot adott vissza – ellenőrizd a megosztást');
     sets=[{rows:parseCSV(txt),old:false}];
   }
-  const r={n:0,changed:0},seen=new Set();
-  for(const s of sets){const x=importRows(s.rows,{old:s.old,hasLinks,seen});r.n+=x.n;r.changed+=x.changed}
+  const r={n:0,changed:0},seen=new Set(),blanks=new Set();r.blanks=blanks;
+  for(const s of sets){const x=importRows(s.rows,{old:s.old,hasLinks,seen,blanks});r.n+=x.n;r.changed+=x.changed}
   if(!r.n)throw new Error('nem találtam lakás-sorokat a táblázatban');
   r.links=hasLinks;
   LS.set('dataAt',Date.now());
@@ -1194,12 +1196,12 @@ function importText(txt){
 }
 function afterImport(r,how){
   save();render();
-  toast(`${how}: ${r.n} lakás frissítve${r.changed?` · 🔄 ${r.changed} kód változott`:''}`);
+  toast(`${how}: ${r.n} lakás frissítve${r.changed?` · 🔄 ${r.changed} kód változott`:''}${r.blanks&&r.blanks.size?` · ⚠ ${r.blanks.size} lakásnál üres kód a táblázatban – a régit megtartottam (${[...r.blanks].slice(0,4).join(', ')}${r.blanks.size>4?'…':''})`:''}`,r.blanks&&r.blanks.size?9000:0);
 }
 async function importFile(f){
   try{
     const r=importBuffer(await f.arrayBuffer());
-    save();render();toast(`${r.n} lakás betöltve${r.changed?` · 🔄 ${r.changed} kód változott`:''}`);
+    save();render();toast(`${r.n} lakás betöltve${r.changed?` · 🔄 ${r.changed} kód változott`:''}${r.blanks&&r.blanks.size?` · ⚠ ${r.blanks.size} lakásnál üres kód – a régit megtartottam`:''}`);
   }catch(e){toast('Nem sikerült beolvasni: '+e.message)}
 }
 function gsUrls(u){
@@ -1287,7 +1289,8 @@ function codesLineS(s,a){
 }
 function codesLine(a){
   if(!a)return'';
-  const p=[];if(a.gate)p.push('🚪 '+esc(a.gate));if(a.code)p.push('🔑 '+esc(a.code));
+  const bl=a.blank||{},w=f=>bl[f]?' <span class="warn small" title="Az új táblázatban üres – a régi kód">⚠</span>':'';
+  const p=[];if(a.gate)p.push('🚪 '+esc(a.gate)+w('gate'));if(a.code)p.push('🔑 '+esc(a.code)+w('code'));
   return p.length?`<div class="cl">${p.join(' · ')}</div>`:'';
 }
 function depotCodes(){
