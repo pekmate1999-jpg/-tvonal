@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.30.0">
+<meta name="app-version" content="1.30.1">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1404,7 +1404,9 @@ function apptCard(s){
   if(!done)h+=`<div class="acts"><div class="row" style="margin-top:0"><a class="btn navbtn ${url?'':'dis'}" ${url?`href="${esc(url)}" target="_blank" rel="noopener" data-act="nav" data-id="${s.id}"`:''}>Navigálás</a>${s.arrivedAt?`<span class="tag" style="align-self:center">🅿 ${fmtT(s.arrivedAt)}</span>`:`<button class="flex1" data-act="arrive" data-id="${s.id}">🅿 Leparkoltam</button>`}</div>
     <div class="row"><button class="okb flex1" data-act="done" data-id="${s.id}">✔ Végeztem</button></div></div>`;
   if(open){
-    h+=`<div class="body"><div class="lbl">${apMode(s)==='by'?'Eddig érj oda':apMode(s)==='after'?'Ennyi után':apMode(s)==='window'?'Ettől – eddig':'Kezdés'} · ott töltött idő (perc)</div><div class="row" style="margin-top:0"><input type="time" data-apst="${s.id}" value="${hhmm(st)}" style="flex:1;margin:0">${apMode(s)==='window'?`<input type="time" data-apend="${s.id}" value="${hhmm(s.appt.end||st)}" style="flex:1;margin:0">`:''}<input data-apdur="${s.id}" inputmode="numeric" value="${s.appt.dur||60}" style="width:90px;margin:0"></div>
+    h+=`<div class="body"><div class="lbl">Időzítés</div><select data-apmode="${s.id}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit">
+      ${[['start','⏰ Pontos kezdés (vár, ha korán érsz oda)'],['by','⏳ Eddig érj oda'],['after','⏩ Ennyi után'],['window','↔ Két időpont között'],['any','🔓 Bármikor']].map(([v,l])=>`<option value="${v}" ${apMode(s)===v?'selected':''}>${l}</option>`).join('')}</select>
+    <div class="lbl">${apMode(s)==='by'?'Eddig érj oda':apMode(s)==='after'?'Ennyi után':apMode(s)==='window'?'Ettől – eddig':'Kezdés'} · ott töltött idő (perc)</div><div class="row" style="margin-top:0"><input type="time" data-apst="${s.id}" value="${hhmm(st)}" style="flex:1;margin:0">${apMode(s)==='window'?`<input type="time" data-apend="${s.id}" value="${hhmm(s.appt.end||st)}" style="flex:1;margin:0">`:''}<input data-apdur="${s.id}" inputmode="numeric" value="${s.appt.dur||60}" style="width:90px;margin:0"></div>
     ${s.apt?`<div class="lbl">Cím</div><input data-oaddr="${s.id}" value="${esc(s.apt.address||'')}">`:a?`<div class="lbl">Cím</div><input data-f="address" data-key="${esc(norm(a.name))}" data-name="${esc(a.name)}" value="${esc(a.address||'')}">`:''}
     <div class="row">${done?`<button data-act="undo" data-id="${s.id}">↩ Visszavon</button>`:''}<button class="bad" data-act="del" data-id="${s.id}">✕ Törlés</button></div></div>`;
   }
@@ -2370,9 +2372,9 @@ document.addEventListener('click',e=>{
   if(act==='apptCancel'){ui.modal=null;render();return}
   if(act==='apptSave'){
     const v=id=>(($(id)||{}).value||'').trim();
-    const nm=v('#apPlace'),st=v('#apStart'),ad=v('#apAddr'),mode=v('#apMode')||'start',keep=($('#apKeep')||{}).checked,excl=($('#apExcl')||{}).checked;
+    const nm=v('#apPlace'),st=v('#apStart'),ad=v('#apAddr');let mode=v('#apMode')||'start';const keep=($('#apKeep')||{}).checked,excl=($('#apExcl')||{}).checked;
     const tm=st.match(/^(\d{1,2}):(\d{2})$/);if(!nm){toast('Add meg a megnevezést');return}if(!tm&&mode!=='any'){toast('Add meg az időpontot');return}
-    const te=v('#apEnd').match(/^(\d{1,2}):(\d{2})$/);if(mode==='window'&&!te){toast('Add meg, meddig („Eddig”)');return}
+    let te=v('#apEnd').match(/^(\d{1,2}):(\d{2})$/);if(te&&mode!=='window'&&mode!=='any'){mode='window'}if(mode==='window'&&!te){toast('Add meg, meddig („Eddig”)');return}
     const saved=Object.values(apts).find(x=>x.apptMin&&x.name.toLowerCase()===nm.toLowerCase());
     const du=+v('#apDur')||(saved&&saved.apptMin)||10;
     const s={id:uid(),name:saved?saved.name:nm,status:'pending',packs:0,cleaner:'done',appt:{start:tm?atTime(today.date,+tm[1],+tm[2]):Date.now(),...(mode==='window'?{end:atTime(today.date,+te[1],+te[2])}:{}),dur:du,mode,excl:saved?true:excl}};
@@ -2501,6 +2503,7 @@ document.addEventListener('change',async e=>{
   if(t.dataset.after){const s=today&&today.stops.find(x=>x.id===t.dataset.after),a=s&&getApt(s);if(a&&/^\d{1,2}:\d{2}$/.test(t.value)){a.notBefore=t.value;save();render();optimize();toast(`⏳ ${a.name}: ${t.value} előtt nem tervez oda`)}return}
   if(t.dataset.dl){const s=today&&today.stops.find(x=>x.id===t.dataset.dl);const m=t.value.match(/^(\d{1,2}):(\d{2})$/);
     if(s&&m){const ty=s.dl&&s.dl.type==='arrive'?'arrive':'done';s.dl={at:atTime(today.date,+m[1],+m[2]),type:ty,label:t.value+(ty==='arrive'?'-ig érj oda':'')};delete s.nobook;save();render();optimize()}return}
+  if(t.dataset.apmode){const s=today&&today.stops.find(x=>x.id===t.dataset.apmode);if(s&&s.appt){s.appt.mode=t.value;if(t.value==='window'&&!s.appt.end)s.appt.end=s.appt.start+60*6e4;save();render();toast('📅 '+s.name+': '+apTimeTxt(s)+' – újratervezés…');optimize()}return}
   if(t.dataset.apend){const s=today&&today.stops.find(x=>x.id===t.dataset.apend),m=t.value.match(/^(\d{1,2}):(\d{2})$/);if(s&&s.appt&&m){s.appt.end=atTime(today.date,+m[1],+m[2]);save();render();optimize()}return}
   if(t.dataset.apst||t.dataset.apdur){const s=today&&today.stops.find(x=>x.id===(t.dataset.apst||t.dataset.apdur));if(!s||!s.appt)return;
     if(t.dataset.apst){const m=t.value.match(/^(\d{1,2}):(\d{2})$/);if(m)s.appt.start=atTime(today.date,+m[1],+m[2])}else s.appt.dur=Math.max(5,+t.value||60);
