@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.3">
+<meta name="app-version" content="1.32.4">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1546,7 +1546,7 @@ function viewToday(){
   {const hp=today.stops.some(s=>s.status!=='done'&&s.type!=='depot');
   h+=`<div class="row" style="margin:0 0 8px">${!today.startedAt?'<button class="okb flex1" data-act="start" style="padding:12px 8px">▶ Munka indítása</button>':'<button class="bad flex1" data-act="end" style="padding:12px 8px">⏹ Munka vége</button>'}
   <button class="pri flex1" data-act="optimize" style="padding:12px 8px">🧭 Újratervezés</button></div>
-  <div class="row" style="margin:0 0 8px;gap:6px">${today.startedAt?`<button class="flex1 sm" data-act="outNow">🏭 Kifogytam</button>`:hp?`<button class="flex1 sm" data-act="loadOpen">🧺 Pakolás</button>`:''}<button class="flex1 sm" data-act="apptNew">📅 Program</button>${hp?`<button class="flex1 sm ${ui.shortList?'on':''}" data-act="shortList">📋 Rövid / sorrend${today.orderLocked?' 🔒':today.stops.some(s=>s.status!=='done'&&s.locked)?' 📌':''}</button>`:''}</div>`}
+  <div class="row" style="margin:0 0 8px;gap:6px">${hp?`<button class="flex1 sm" data-act="loadOpen">🧺 Pakolás</button>`:''}${today.startedAt?`<button class="flex1 sm" data-act="outNow">🏭 Kifogytam</button>`:''}<button class="flex1 sm" data-act="apptNew">📅 Program</button>${hp?`<button class="flex1 sm ${ui.shortList?'on':''}" data-act="shortList">📋 ${today.startedAt?'Rövid':'Rövid / sorrend'}${today.orderLocked?' 🔒':today.stops.some(s=>s.status!=='done'&&s.locked)?' 📌':''}</button>`:''}</div>`}
   h+=''+deadlineLine()+skippedLine()+(today.meter&&(today.meter.start||today.meter.home0)?`<div class="dl">${fuelLines(today)||('⛽ Indulás: '+(today.meter.start||today.meter.home0).km+' km óraállás rögzítve')}</div>`:'')+packList();
   const pend=stops.filter(s=>s.status!=='done');
   const doneL=stops.filter(s=>s.status==='done').sort((a,b)=>a.doneAt-b.doneAt);
