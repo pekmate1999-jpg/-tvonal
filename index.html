@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.2">
+<meta name="app-version" content="1.32.3">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -1065,6 +1065,7 @@ const COLS=[
   ['name',/lak[aá]s|n[eé]v|apartman|megnevez|azonos/i]
 ];
 const CODE_FIELDS=['gate','code','spare','keySpot'];
+const KEEP_BLANK=[...CODE_FIELDS,'help','helpUrl','address'];
 const FL={gate:'Kapukód',code:'Kulcsőr / ajtókód',spare:'Pótkulcsőr',keySpot:'Takarítós kulcs helye',address:'Cím',door:'Ajtó',help:'Segédlet',helpUrl:'Segédlet link'};
 const colType=h=>{h=String(h||'').trim();if(!h)return null;for(const[f,rx]of COLS)if(rx.test(h))return f;return'?'};
 const cleanV=v=>{v=String(v??'').replace(/\s+/g,' ').trim();if(/^-?\d+\.0+$/.test(v))v=v.replace(/\.0+$/,'');return /^[-–x]$/i.test(v)?'':v};
@@ -1117,7 +1118,7 @@ function importRows(rows,opt){
       if(v===undefined)continue;
       if(upd.mine[f]){if(v===upd.mine[f].from)continue;delete upd.mine[f]} // a táblázatban még a régi kód van → a tiéd marad
       if(!v&&upd.manual[f])continue;          // kézzel beírt adatot üres cella nem töröl
-      if(!v&&old&&CODE_FIELDS.includes(f)&&old[f]){(upd.blank=upd.blank||{})[f]=true;blanks.add(name);continue} // üres cella nem törli a meglévő kódot
+      if(!v&&old&&KEEP_BLANK.includes(f)&&old[f]){(upd.blank=upd.blank||{})[f]=true;blanks.add(name);continue} // üres cella nem törli a meglévő kódot / segédletet / címet
       if(v&&upd.blank)delete upd.blank[f];
       if(v)delete upd.manual[f];
       if(old&&CODE_FIELDS.includes(f)&&old[f]&&v&&old[f]!==v)prev[f]=old[f];
@@ -1343,7 +1344,7 @@ function aptNav(a){
 }
 function aptHelp(a){
   if(!a)return'';let h='';
-  if(a.helpUrl&&/^https?:\/\//i.test(a.helpUrl))h+=`<div class="row"><a class="btn sm flex1" href="${esc(a.helpUrl)}" target="_blank" rel="noopener">📄 Bejutási segédlet</a></div>`;
+  if(a.helpUrl&&/^https?:\/\//i.test(a.helpUrl))h+=`<div class="row"><a class="btn sm flex1" href="${esc(a.helpUrl)}" target="_blank" rel="noopener">📄 Bejutási segédlet${a.blank&&a.blank.helpUrl?' <span class="warn small">⚠ régi</span>':''}</a></div>`;
   if(a.help)h+=`<div class="pre small" style="margin-top:6px">${esc(a.help)}</div>`;
   return h;
 }
