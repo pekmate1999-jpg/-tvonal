@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.5">
+<meta name="app-version" content="1.32.6">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -2233,14 +2233,17 @@ async function initMap(){
 // előző nap betöltött, de el nem kezdett lista: reggel a mai napra veszi (határidők, kezdés, időpontok is)
 function rollDay(){
   if(!today||today.startedAt||today.stops.some(s=>s.status==='done'))return false;
-  const a=new Date(today.date+'T12:00:00'),b=new Date(ld()+'T12:00:00'),diff=Math.round((b-a)/864e5);if(diff<=0)return false;
+  // este (17 óra után) betöltött, el nem kezdett lista = a holnapi nap listája
+  const ev=new Date().getHours()>=17,b=new Date(ld()+'T12:00:00');if(ev)b.setDate(b.getDate()+1);
+  const a=new Date(today.date+'T12:00:00'),diff=Math.round((b-a)/864e5);if(diff<=0)return false;
+  const tgt=b.getFullYear()+'-'+pad2(b.getMonth()+1)+'-'+pad2(b.getDate());
   const sh=t=>{if(!t)return t;const d=new Date(t);d.setDate(d.getDate()+diff);return d.getTime()};
   today.planStart=sh(today.planStart);
   today.stops.forEach(s=>{if(s.dl&&s.dl.at)s.dl.at=sh(s.dl.at);if(s.appt){s.appt.start=sh(s.appt.start);if(s.appt.end)s.appt.end=sh(s.appt.end)}
     if(s.later)s.later=sh(s.later);if(s.viaDepot&&s.viaDepot.ready)s.viaDepot.ready=sh(s.viaDepot.ready);if(s.readyAt)s.readyAt=sh(s.readyAt);
     delete s.eta;delete s.etaDone;delete s.late;delete s.arrivedAt;delete s.navAt;delete s.legStartAt;delete s.legPlanMin;delete s.legPlanEta});
-  today.date=ld();delete today.lastPos;save();
-  setTimeout(()=>{toast('📅 Az előző este betöltött listát a mai napra vettem – újratervezés…');optimize()},50);return true;
+  today.date=tgt;delete today.lastPos;save();
+  setTimeout(()=>{toast(ev?'📅 Este betöltött lista → a holnapi napra tervezem ('+tgt+')':'📅 Az előző este betöltött listát a mai napra vettem – újratervezés…');optimize()},50);return true;
 }
 function render(){
   rollDay();
