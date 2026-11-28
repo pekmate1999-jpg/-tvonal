@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.6">
+<meta name="app-version" content="1.32.7">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -768,8 +768,17 @@ async function optimize(){
 let planning=false,again=false;
 let PLAN_T0=0; // perc: a rögzített (kézi) szakasz ideje, a terv utána indul
 function planNow(){const n=Date.now();return today&&!today.startedAt&&today.planStart&&today.planStart>n?today.planStart:n}
+// a határidők / időpontok mindig a nap dátumára vonatkozzanak (ha egy korábbi napról maradt, átteszi – ugyanarra az órára)
+function anchorDay(){
+  if(!today)return;const dk=t=>{const d=new Date(t);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())};
+  const fx=t=>{if(!t)return t;if(dk(t)===today.date)return t;const d=new Date(t);return atTime(today.date,d.getHours(),d.getMinutes())};
+  if(!today.startedAt)today.planStart=fx(today.planStart);
+  today.stops.forEach(s=>{if(s.status==='done')return;
+    if(s.dl&&s.dl.at){const n=fx(s.dl.at);if(n!==s.dl.at)s.dl={...s.dl,at:n}}
+    if(s.appt){const a=fx(s.appt.start),b=s.appt.end?fx(s.appt.end):null;if(a!==s.appt.start||b!==s.appt.end)s.appt={...s.appt,start:a,...(b?{end:b}:{})}}});
+}
 async function replan(){
-  if(!today)return;
+  if(!today)return;anchorDay();
   if(planning){again=true;return}
   planning=true;
   try{do{again=false;await doPlan()}while(again&&today)}catch(e){}
