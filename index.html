@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#2f7d1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="app-version" content="1.32.7">
+<meta name="app-version" content="1.32.9">
 <title>Ágynemű futár</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -231,6 +231,11 @@ function fuzzyKey(k){
   c=E.filter(([key])=>key.startsWith(k));
   return c.length?pickKey(c):null;
 }
+// a táblázatban átnevezett lakás (pl. HOL → HOLLÓ) új sorából hiányozhat a segédlet / kód: a régi sorból (ugyanaz a cím) kiegészíti
+function fillFromAlias(){let n=0;const na=s=>String(s||'').toLowerCase().replace(/[^a-z0-9áéíóöőúüű]/g,'');
+  for(const y of Object.values(apts))for(const k of (y.aliases||[])){const x=apts[k];if(!x||x===y||!x.address||na(x.address)!==na(y.address))continue;
+    for(const f of['help','helpUrl','gate','code','keySpot'])if(!x[f]&&y[f]){x[f]=y[f];(x.inh=x.inh||{})[f]=y.name;n++}}
+  return n}
 function findApt(name){
   const k=norm(name);if(!k)return null;
   const al=cfg.alias[k];if(al&&apts[al])return apts[al];
@@ -862,6 +867,7 @@ function splitStop(s){
   today.stops.splice(i,1,...parts);
 }
 function newDay(names,date,append,urgent,info){
+  if(append&&today)date=today.date; // hozzáadásnál a határidők a lista napjára vonatkoznak (pl. holnapi lista este)
   const U=new Set((urgent||[]).map(norm));
   const stops=names.map((n,ix)=>({id:uid(),name:n,ord:ix,status:'pending',cleaner:'done',packs:info&&info[norm(n)]&&(info[norm(n)].dirty||/szennyes/i.test(info[norm(n)].raw||''))?0:1,...dlFor(n,info,date),...(U.has(norm(n))?{urgent:{reason:'üzenetben jelölve',at:Date.now()}}:{})}));
   if(append&&today){
@@ -1192,7 +1198,7 @@ function importBuffer(buf){
   const r={n:0,changed:0},seen=new Set(),blanks=new Set();r.blanks=blanks;
   for(const s of sets){const x=importRows(s.rows,{old:s.old,hasLinks,seen,blanks});r.n+=x.n;r.changed+=x.changed}
   if(!r.n)throw new Error('nem találtam lakás-sorokat a táblázatban');
-  r.links=hasLinks;
+  r.links=hasLinks;fillFromAlias();
   LS.set('dataAt',Date.now());
   return r;
 }
@@ -1206,6 +1212,7 @@ function importText(txt){
   return r;
 }
 function afterImport(r,how){
+  fillFromAlias();
   save();render();
   toast(`${how}: ${r.n} lakás frissítve${r.changed?` · 🔄 ${r.changed} kód változott`:''}${r.blanks&&r.blanks.size?` · ⚠ ${r.blanks.size} lakásnál üres kód a táblázatban – a régit megtartottam (${[...r.blanks].slice(0,4).join(', ')}${r.blanks.size>4?'…':''})`:''}`,r.blanks&&r.blanks.size?9000:0);
 }
@@ -2646,7 +2653,7 @@ function processSharedText(text){
   }
   ui.paste=text;render();toast('Az üzenet a beillesztő mezőbe került');
 }
-migrate();
+migrate();try{if(fillFromAlias())save()}catch(e){}
 render();
 handleShare();
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(()=>{});
